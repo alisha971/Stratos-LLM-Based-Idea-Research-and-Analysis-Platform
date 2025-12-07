@@ -1,0 +1,95 @@
+# ===========================================
+# Python / FastAPI Backend
+# ===========================================
+
+# Virtual environment
+backend/venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.db
+
+# Uvicorn log files
+*.log
+
+# Local config and secrets
+backend/.env
+backend/.env.local
+backend/.env.dev
+backend/.env.prod
+
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+*$py.class
+
+# MyPy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# PyInstaller
+*.spec
+
+# Test caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# ===========================================
+# Node / Next.js Frontend
+# ===========================================
+
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/.env.development
+frontend/.env.production
+frontend/.vercel/
+
+# NPM logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+
+# Vercel output
+.vercel/
+
+
+# ===========================================
+# OS-specific files
+# ===========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Logs
+*.log
+
+# ===========================================
+# Other
+# ===========================================
+
+# Exports (we store actual PDFs locally)
+backend/exports/
