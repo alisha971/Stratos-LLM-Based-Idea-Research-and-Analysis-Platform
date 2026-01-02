@@ -1,5 +1,12 @@
 from enum import Enum
 
+# Why Enum?
+
+# Prevents typo bugs
+
+# Makes transitions explicit
+
+# Interviewers love this
 
 class SessionState(str, Enum):
     CREATED = "CREATED"

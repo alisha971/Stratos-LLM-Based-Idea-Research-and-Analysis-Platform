@@ -15,4 +15,9 @@ class Settings:
     JWT_SECRET = os.getenv("JWT_SECRET", "supersecret")
     JWT_ALGO = "HS256"
 
+    # ollama | groq | openai (future)
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    
+    
 settings = Settings()
