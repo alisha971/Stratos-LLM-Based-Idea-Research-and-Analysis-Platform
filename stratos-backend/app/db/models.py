@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
 )
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSONB
 from app.db.database import Base
 import uuid
 
@@ -43,6 +44,8 @@ class Session(Base):
     status = Column(String, default="active")
     idea_description = Column(Text)
     clarified_summary = Column(Text)
+    # 🔥 NEW (single field)
+    clarification_schema = Column(JSONB, default=dict)
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="sessions")

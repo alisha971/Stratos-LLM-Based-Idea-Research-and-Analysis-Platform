@@ -1,14 +1,24 @@
+# app/services/orchestrator_service.py
+
 from sqlalchemy.orm import Session
+from fastapi import HTTPException
+import uuid, json
+
 from app.db import models
 from app.utils.state_machine import SessionState
 from app.utils.redis_pub import publish_event
-import uuid
-from fastapi import HTTPException
 from app.workers.clarification_worker import run_clarification
 
 
 class OrchestratorService:
+    """
+    SINGLE source of truth for session state.
+    Orchestrates conversation flow and transitions.
+    """
 
+    # --------------------------------------------------
+    # Session bootstrap
+    # --------------------------------------------------
     @staticmethod
     def start_session(db: Session, user_id: str, idea_description: str):
         session = models.Session(
@@ -21,6 +31,14 @@ class OrchestratorService:
         db.commit()
         db.refresh(session)
 
+        # Save first user message (context seeding)
+        db.add(models.ChatMessage(
+            id=str(uuid.uuid4()),
+            session_id=session.id,
+            role="user",
+            message=idea_description,
+        ))
+
         report = models.Report(
             id=str(uuid.uuid4()),
             session_id=session.id,
@@ -32,91 +50,93 @@ class OrchestratorService:
 
         publish_event("session_created", {
             "session_id": session.id,
-            "state": SessionState.CREATED
+            "state": session.status,
         })
 
         return session, report
 
+    # --------------------------------------------------
+    # Start clarification conversation
+    # --------------------------------------------------
     @staticmethod
     def start_clarification(db: Session, session: models.Session):
         if session.status != SessionState.CREATED:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot start clarification from state {session.status}"
-            )
+            raise HTTPException(400, "Invalid state")
 
         session.status = SessionState.CLARIFYING
         db.commit()
 
         publish_event("clarification_started", {
-            "session_id": session.id,
-            "state": SessionState.CLARIFYING
+            "session_id": session.id
         })
 
-        # 🔥 Trigger Clarification Worker (async, non-blocking)
-        run_clarification.delay(
+        run_clarification.delay(session.id)
+
+    # --------------------------------------------------
+    # Handle user message during clarification
+    # --------------------------------------------------
+    @staticmethod
+    def handle_user_message(db: Session, session: models.Session, message: str):
+        if session.status not in (
+            SessionState.CLARIFYING,
+            SessionState.AWAITING_CONSENT,
+        ):
+            raise HTTPException(400, "Clarification not active")
+
+        db.add(models.ChatMessage(
+            id=str(uuid.uuid4()),
             session_id=session.id,
-            idea=session.idea_description
+            role="user",
+            message=message,
+        ))
+        db.commit()
+
+        # Resume clarification intelligence
+        run_clarification.delay(session.id)
+
+    # --------------------------------------------------
+    # Transition to consent (no hard logic yet)
+    # --------------------------------------------------
+    @staticmethod
+    def request_consent(
+        db: Session,
+        session: models.Session,
+        clarification_result: dict,
+    ):
+        """
+        Persist the proposed clarification summary and research plan.
+        """
+
+        session.clarified_summary = json.dumps(clarification_result, indent=2)
+        session.status = SessionState.AWAITING_CONSENT
+        db.commit()
+
+        publish_event(
+            "clarification_consent_requested",
+            {
+                "session_id": session.id,
+                "summary": clarification_result,
+            }
         )
 
-
+    # --------------------------------------------------
+    # User accepts proposed research plan
+    # --------------------------------------------------
     @staticmethod
-    def submit_clarification(db: Session, session: models.Session, summary: str):
-        if session.status != SessionState.CLARIFYING:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot submit clarification from state {session.status}"
-            )
+    def accept_consent(db: Session, session: models.Session):
+        if session.status != SessionState.AWAITING_CONSENT:
+            raise HTTPException(400, "Consent not requested")
 
-        session.clarified_summary = summary
+        if not session.clarified_summary:
+            raise HTTPException(400, "Missing clarification summary")
+
         session.status = SessionState.READY_FOR_RESEARCH
         db.commit()
 
-        publish_event("clarification_completed", {
-            "session_id": session.id,
-            "state": SessionState.READY_FOR_RESEARCH
-        })
-
-    @staticmethod
-    def start_research(db: Session, session: models.Session):
-        if session.status != SessionState.READY_FOR_RESEARCH:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot start research from state {session.status}"
-            )
-
-        session.status = SessionState.RESEARCH_RUNNING
-        db.commit()
-
-        publish_event("research_started", {
-            "session_id": session.id,
-            "state": session.status
-        })
-
-        return session
-
-    @staticmethod
-    def generate_outline(db: Session, session: models.Session):
-        if session.status != SessionState.RESEARCH_RUNNING:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot generate outline from state {session.status}"
-            )
-
-        session.status = SessionState.OUTLINE_GENERATED
-        db.commit()
-
-        publish_event("outline_generated", {
-            "session_id": session.id,
-            "state": session.status
-        })
-
-        # Still mocked – will be worker in Phase D Part 2
-        return [
-            "Problem Overview",
-            "Market Landscape",
-            "Competitor Analysis",
-            "Trends & Research",
-            "Opportunities & Gaps",
-            "Recommendations"
-        ]
+        publish_event(
+            "clarification_completed",
+            {
+                "session_id": session.id,
+                "state": session.status,
+            }
+        )

@@ -1,6 +1,14 @@
+# app/workers/clarification_worker.py
+
+import json, re
+import uuid
+from sqlalchemy.orm import Session
+
 from app.workers.celery_app import celery_app
-from app.llm.client import generate_text
-from app.llm.prompts import CLARIFICATION_PROMPT
+from app.llm.client import generate_chat
+from app.llm.prompts import CLARIFICATION_CONTROLLER_PROMPT
+from app.db.session import SessionLocal
+from app.db import models
 from app.utils.redis_pub import publish_event
 
 
@@ -10,26 +18,87 @@ from app.utils.redis_pub import publish_event
     retry_backoff=5,
     retry_kwargs={"max_retries": 3},
 )
-def run_clarification(self, session_id: str, idea: str):
-    publish_event("clarification_started", {"session_id": session_id})
+def run_clarification(self, session_id: str):
+    """
+    Stateless clarification intelligence.
+    Reads conversation, asks next question, emits update.
+    """
+    db: Session = SessionLocal()
 
-    output = generate_text(
-        system_prompt=CLARIFICATION_PROMPT,
-        user_prompt=idea,
-    )
+    try:
+        session = db.query(models.Session).filter_by(id=session_id).first()
+        if not session:
+            return
 
-    questions = [
-        q.strip()
-        for q in output.split("\n")
-        if q.strip()
-    ]
+        # Load full conversation
+        chat_messages = (
+            db.query(models.ChatMessage)
+            .filter_by(session_id=session_id)
+            .order_by(models.ChatMessage.created_at.asc())
+            .all()
+        )
 
-    publish_event(
-        "clarification_questions",
-        {
-            "session_id": session_id,
-            "questions": questions,
-        },
-    )
+        messages = [
+            {"role": "system", "content": CLARIFICATION_CONTROLLER_PROMPT}
+        ]
 
-    return questions
+        for msg in chat_messages:
+            messages.append({
+                "role": msg.role,
+                "content": msg.message,
+            })
+
+        raw_output = generate_chat(
+            messages=messages,
+            temperature=0.2,
+        )
+
+        raw_output = raw_output.strip()
+
+        # Guard 1: empty response
+        if not raw_output:
+            raise ValueError("LLM returned empty response")
+
+        # Guard 2: extract JSON object if extra text exists
+        try:
+            result = json.loads(raw_output)
+        except json.JSONDecodeError:
+            # Attempt to extract JSON block
+            match = re.search(r"\{.*\}", raw_output, re.DOTALL)
+            if not match:
+                raise ValueError(f"Invalid JSON from LLM: {raw_output[:300]}")
+            result = json.loads(match.group(0))
+
+
+        # Build assistant conversational text
+        db.add(models.ChatMessage(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            role="assistant",
+            message=json.dumps({
+                "mirror_summary": result.get("mirror_summary"),
+                "next_question": result.get("next_question"),
+            }),
+        ))
+        db.commit()
+
+        # Emit conversational update (UI + orchestrator listening)
+        publish_event(
+            "clarification_update",
+            {
+                "session_id": session_id,
+                "schema": result.get("updated_schema"),
+                "hard_constraints": result.get("hard_constraints"),
+                "hypotheses": result.get("hypotheses"),
+                "knowledge_gaps": result.get("knowledge_gaps"),
+                "research_directives": result.get("research_directives"),
+                "confidence_score": result.get("confidence_score"),
+                "unknown_detected": result.get("unknown_detected"),
+                "turn_fatigue": result.get("turn_fatigue"),
+                "mirror_summary": result.get("mirror_summary"),
+                "next_question": result.get("next_question"),
+            }
+        )
+
+    finally:
+        db.close()
