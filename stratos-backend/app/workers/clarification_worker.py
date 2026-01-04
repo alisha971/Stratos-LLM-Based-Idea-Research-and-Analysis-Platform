@@ -12,6 +12,41 @@ from app.db import models
 from app.utils.redis_pub import publish_event
 
 
+SCHEMA_FIELDS = [
+    "project_domain",
+    "target_persona",
+    "core_problem",
+    "current_workaround",
+    "proposed_solution",
+    "differentiation",
+]
+
+
+def merge_schema(existing: dict, incoming: dict) -> dict:
+    merged = existing.copy()
+
+    for key in SCHEMA_FIELDS:
+        if merged.get(key) not in (None, "", []):
+            # Field already known → do NOT overwrite
+            continue
+
+        incoming_value = incoming.get(key)
+        if incoming_value not in (None, "", []):
+            merged[key] = incoming_value
+
+    return merged
+
+def compute_confidence(schema: dict) -> float:
+    """
+    Deterministic confidence based on schema completeness.
+    Monotonic by design.
+    """
+    filled = sum(
+        1 for v in schema.values()
+        if v not in (None, "", [])
+    )
+    return round(filled / len(SCHEMA_FIELDS), 2)
+
 @celery_app.task(
     bind=True,
     autoretry_for=(Exception,),
@@ -69,6 +104,23 @@ def run_clarification(self, session_id: str):
                 raise ValueError(f"Invalid JSON from LLM: {raw_output[:300]}")
             result = json.loads(match.group(0))
 
+        # -------------------------------
+        # Merge schema (MVP accumulation)
+        # -------------------------------
+        existing_schema = session.clarification_schema or {}
+        incoming_schema = result.get("updated_schema") or {}
+
+        merged_schema = merge_schema(existing_schema, incoming_schema)
+        session.clarification_schema = merged_schema
+
+        # -------------------------------
+        # Calculate confidence (NEW)
+        # -------------------------------
+        confidence_score = compute_confidence(merged_schema)
+
+        # -------------------------------
+        # Persist assistant message (JSON ONLY)
+        # -------------------------------
 
         # Build assistant conversational text
         db.add(models.ChatMessage(
@@ -87,12 +139,12 @@ def run_clarification(self, session_id: str):
             "clarification_update",
             {
                 "session_id": session_id,
-                "schema": result.get("updated_schema"),
+                "schema": merged_schema,
                 "hard_constraints": result.get("hard_constraints"),
                 "hypotheses": result.get("hypotheses"),
                 "knowledge_gaps": result.get("knowledge_gaps"),
                 "research_directives": result.get("research_directives"),
-                "confidence_score": result.get("confidence_score"),
+                "confidence_score": confidence_score,
                 "unknown_detected": result.get("unknown_detected"),
                 "turn_fatigue": result.get("turn_fatigue"),
                 "mirror_summary": result.get("mirror_summary"),

@@ -118,6 +118,39 @@ If a field has no update this turn:
 - Repeat its previous value OR
 - Set it explicitly to null
 
+QUESTION SELECTION CONTRACT:
+
+Before generating next_question, you MUST:
+
+1. Identify which schema fields are currently null.
+2. Choose EXACTLY ONE of those null fields.
+3. Ask a question ONLY to fill that field.
+4. NEVER ask a question that maps to a non-null field.
+
+SCHEMA PROGRESSION RULES (CRITICAL):
+
+You MUST treat the schema as a progressive state machine.
+
+- Each schema field can be filled ONLY ONCE.
+- Once a field is non-null, it is considered COMPLETE.
+- You MUST NOT ask follow-up or clarification questions about any completed field.
+- You MUST always select the NEXT question from the MOST IMPORTANT remaining null field.
+
+If a user response partially relates to a completed field:
+- Do NOT reopen that field.
+- Do NOT reset it to null.
+- Do NOT ask about it again.
+- Instead, extract any NEW information that belongs to other null fields.
+
+If all core fields are non-null:
+- Stop asking questions.
+- Set next_question to an empty string "".
+
+ANTI-REGRESSION RULE:
+
+You are NOT allowed to rephrase, refine, or reconfirm information that has already been captured in updated_schema.
+
+
 --------------------------------------------------
 JSON FORMAT (REQUIRED)
 --------------------------------------------------
