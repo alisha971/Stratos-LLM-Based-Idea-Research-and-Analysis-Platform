@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.db import models
 from app.utils.redis_pub import publish_event
 
+CONFIDENCE_THRESHOLD = 0.95
 
 SCHEMA_FIELDS = [
     "project_domain",
@@ -151,6 +152,24 @@ def run_clarification(self, session_id: str):
                 "next_question": result.get("next_question"),
             }
         )
+        
+        # 🔔 Deterministic stop signal
+        if confidence_score >= CONFIDENCE_THRESHOLD:
+            publish_event(
+                "clarification_ready",
+                {
+                    "session_id": session_id,
+                    "schema": merged_schema,
+                    "hard_constraints": result.get("hard_constraints", []),
+                    "hypotheses": result.get("hypotheses", []),
+                    "knowledge_gaps": result.get("knowledge_gaps", []),
+                    "research_directives": result.get("research_directives", []),
+                    "unknown_detected": result.get("unknown_detected", []),
+                    "confidence_score": confidence_score,
+                    
+                    
+                }
+            )
 
     finally:
         db.close()

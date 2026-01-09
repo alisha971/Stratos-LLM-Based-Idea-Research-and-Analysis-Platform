@@ -98,24 +98,33 @@ class OrchestratorService:
     # Transition to consent (no hard logic yet)
     # --------------------------------------------------
     @staticmethod
-    def request_consent(
+    def handle_clarification_ready(
         db: Session,
-        session: models.Session,
-        clarification_result: dict,
+        session_id: str,
+        payload: dict,
     ):
-        """
-        Persist the proposed clarification summary and research plan.
-        """
+        session = db.query(models.Session).filter_by(id=session_id).first()
+        if not session or session.status != SessionState.CLARIFYING:
+            return
 
-        session.clarified_summary = json.dumps(clarification_result, indent=2)
         session.status = SessionState.AWAITING_CONSENT
+        session.clarified_summary = json.dumps({
+            "final_schema": payload["schema"],
+            "hard_constraints": payload.get("hard_constraints", []),
+            "hypotheses": payload.get("hypotheses", []),
+            "knowledge_gaps": payload.get("knowledge_gaps", []),
+            "research_directives": payload.get("research_directives", []),
+            "unknown_detected": payload.get("unknown_detected", []),
+            "confidence_score": payload["confidence_score"],
+        }, indent=2)
+
         db.commit()
 
         publish_event(
             "clarification_consent_requested",
             {
                 "session_id": session.id,
-                "summary": clarification_result,
+                "summary": session.clarified_summary,
             }
         )
 
@@ -138,5 +147,6 @@ class OrchestratorService:
             {
                 "session_id": session.id,
                 "state": session.status,
+                "schema": session.clarified_summary,
             }
         )

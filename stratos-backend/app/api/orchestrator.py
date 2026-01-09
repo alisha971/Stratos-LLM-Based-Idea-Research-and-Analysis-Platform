@@ -11,6 +11,9 @@ router = APIRouter(prefix="/orchestrate", tags=["Orchestrator"])
 
 # ------------------------------------------------------------------
 # 1. Start Session (context seeding + first AI question)
+# - Seeds context
+# - Moves session → CLARIFYING
+# - Triggers first clarification worker run
 # ------------------------------------------------------------------
 @router.post("/start-session")
 def start_session(
@@ -37,6 +40,9 @@ def start_session(
 
 # ------------------------------------------------------------------
 # 2. Clarification Chat (multi-turn loop)
+# - Accepts user replies
+# - Appends message
+# - Triggers clarification worker
 # ------------------------------------------------------------------
 @router.post("/clarification/chat")
 def clarification_chat(
@@ -67,7 +73,9 @@ def clarification_chat(
 
 
 # ------------------------------------------------------------------
-# 3. Accept Clarification & Research Plan (consent)
+# 3. Accept Clarification (Consent)
+# - Called AFTER frontend receives
+#   `clarification_consent_requested` SSE
 # ------------------------------------------------------------------
 @router.post("/clarification/accept-consent")
 def accept_clarification_consent(
@@ -81,18 +89,15 @@ def accept_clarification_consent(
     if session.status != SessionState.AWAITING_CONSENT:
         raise HTTPException(
             400,
-            f"Consent not requested (current: {session.status})"
+            f"Consent not requested (current: {session.status})",
         )
 
-    OrchestratorService.accept_consent(
-        db=db,
-        session=session,
-    )
+    OrchestratorService.accept_consent(db, session)
 
     return {
         "session_id": session.id,
         "status": session.status,
-        "message": "Clarification accepted. Ready for research."
+        "message": "Clarification accepted. Research can begin.",
     }
 
 
