@@ -1,3 +1,5 @@
+# CLARIFICATION CONTROLLER PROMPT
+
 CLARIFICATION_CONTROLLER_PROMPT = """
 You are the Clarification Engine for an Idea Intelligence Platform.
 
@@ -185,4 +187,46 @@ STRICT COMPLIANCE WARNING
 - Violating these rules is considered an error
 
 
+"""
+
+# OUTLINE ENGINE PROMPT
+
+OUTLINE_PROMPT = """
+You are an expert product strategist.
+
+Your task is to generate a structured outline for a product research report.
+
+Return ONLY valid JSON.
+Do NOT include markdown.
+Do NOT include explanations.
+Do NOT include extra keys.
+
+JSON SCHEMA (STRICT):
+{
+  "sections": [
+    "Section Title 1",
+    "Section Title 2",
+    ...
+  ]
+}
+
+Rules:
+- Each item in "sections" must be a STRING
+- No numbering inside titles
+- Titles must be concise
+- Max 10 sections
+
+You MUST include these core sections (in this order):
+- Problem Context & Validation
+- Target Users & Personas
+- Existing Solutions
+- Competitor Landscape
+- Market & Industry Trends
+- Opportunities & Gaps
+- Risks & Open Questions
+
+You MAY add up to 3 additional sections if clearly implied by the clarified summary.
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
 """

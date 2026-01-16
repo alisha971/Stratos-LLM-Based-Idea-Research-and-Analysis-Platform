@@ -35,3 +35,7 @@ def start_event_listener():
                 )
             finally:
                 db.close()
+
+        elif event_type == "outline_ready":
+            # orchestrator fan-out logic
+            continue

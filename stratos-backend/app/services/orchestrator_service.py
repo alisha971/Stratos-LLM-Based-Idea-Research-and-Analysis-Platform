@@ -8,6 +8,8 @@ from app.db import models
 from app.utils.state_machine import SessionState
 from app.utils.redis_pub import publish_event
 from app.workers.clarification_worker import run_clarification
+from app.workers.outline_worker import run_outline
+
 
 
 class OrchestratorService:
@@ -141,6 +143,12 @@ class OrchestratorService:
 
         session.status = SessionState.READY_FOR_RESEARCH
         db.commit()
+        
+        report = (
+            db.query(models.Report)
+            .filter_by(session_id=session.id)
+            .first()
+        )
 
         publish_event(
             "clarification_completed",
@@ -150,3 +158,6 @@ class OrchestratorService:
                 "schema": session.clarified_summary,
             }
         )
+
+        # 🔥 Trigger outline
+        run_outline.delay(report.id)    

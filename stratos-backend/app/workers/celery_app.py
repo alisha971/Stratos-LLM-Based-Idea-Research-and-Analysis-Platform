@@ -17,3 +17,12 @@ celery_app.conf.update(
 
 # 🔥 FORCE TASK REGISTRATION
 import app.workers.clarification_worker
+import app.workers.outline_worker
+
+import app.workers.research_worker
+import app.workers.trend_worker
+import app.workers.competitor_worker
+import app.workers.section_worker
+import app.workers.embedding_worker
+import app.workers.assembler_worker
+import app.workers.export_worker
