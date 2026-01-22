@@ -86,11 +86,7 @@ def run_outline(self, report_id: str):
                 "title": title,
                 "order_index": idx,
             })
-
-        # Update state
-        report.status = "OUTLINE_GENERATED"
-        session.status = "OUTLINE_GENERATED"
-
+            
         db.commit()
 
         # -------------------------------

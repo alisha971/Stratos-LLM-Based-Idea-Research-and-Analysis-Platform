@@ -9,7 +9,9 @@ from app.utils.state_machine import SessionState
 from app.utils.redis_pub import publish_event
 from app.workers.clarification_worker import run_clarification
 from app.workers.outline_worker import run_outline
-
+from app.workers.research_worker import run_research
+# from app.workers.trend_worker import run_trend
+# from app.workers.competitor_worker import run_competitor
 
 
 class OrchestratorService:
@@ -161,3 +163,61 @@ class OrchestratorService:
 
         # 🔥 Trigger outline
         run_outline.delay(report.id)    
+        
+        
+    @staticmethod
+    def handle_outline_ready(
+        db: Session,
+        report_id: str,
+        sections: list,
+    ):
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        session = (
+            db.query(models.Session)
+            .filter_by(id=report.session_id)
+            .first()
+        )
+        if not session:
+            return
+
+        # 🔒 Idempotency guard
+        if session.status != SessionState.READY_FOR_RESEARCH:
+            return
+
+        # -----------------------------
+        # State transition - Accept Outline
+        # -----------------------------
+        session.status = SessionState.OUTLINE_GENERATED
+        report.status = SessionState.OUTLINE_GENERATED
+        db.commit()
+
+        publish_event(
+            "outline_accepted",
+            {
+                "session_id": session.id,
+                "report_id": report.id,
+                "sections": sections,
+            }
+        )
+
+        # -----------------------------
+        # FAN-OUT (parallel)
+        # -----------------------------
+        session.status = SessionState.RESEARCH_RUNNING
+        report.status = SessionState.RESEARCH_RUNNING
+        db.commit()
+
+        publish_event(
+            "research_started",
+            {
+                "session_id": session.id,
+                "report_id": report.id,
+            }
+        )
+
+        run_research.delay(report.id)
+        # run_trend.delay(report.id)
+        # run_competitor.delay(report.id)

@@ -230,3 +230,26 @@ You MAY add up to 3 additional sections if clearly implied by the clarified summ
 Clarified Summary:
 {{CLARIFIED_SUMMARY}}
 """
+
+RESEARCH_QUERY_PROMPT = """
+You are a research assistant.
+
+Your task is to generate concise, high-signal web search queries
+based on a clarified product idea.
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations
+- Do NOT include markdown
+- Queries must be suitable for Google/Bing search
+- Each query should be short (5–10 words)
+- Generate between 3 and 5 queries
+
+Return JSON in this exact format:
+{
+  "queries": ["query 1", "query 2", "query 3"]
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+"""

@@ -38,4 +38,12 @@ def start_event_listener():
 
         elif event_type == "outline_ready":
             # orchestrator fan-out logic
-            continue
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_outline_ready(
+                    db=db,
+                    report_id=payload["report_id"],
+                    sections=payload["sections"],
+                )
+            finally:
+                db.close()
