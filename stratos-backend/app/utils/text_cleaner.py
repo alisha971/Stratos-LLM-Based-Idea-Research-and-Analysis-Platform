@@ -12,6 +12,8 @@ def clean_html(html: str) -> str:
         tag.decompose()
 
     text = soup.get_text(separator="\n")
+    # normalize unicode
+    text = text.replace("\u00a0", " ").replace("\u200b", "")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
 
     return "\n".join(lines)

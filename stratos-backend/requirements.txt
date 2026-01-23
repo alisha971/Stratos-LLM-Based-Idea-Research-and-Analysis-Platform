@@ -19,3 +19,4 @@ beautifulsoup4
 httpx
 groq
 tldextract
+google-search-results

@@ -19,5 +19,7 @@ class Settings:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     
+    # SERPAPI
+    SERP_API_KEY = os.getenv("SERP_API_KEY")
     
 settings = Settings()
