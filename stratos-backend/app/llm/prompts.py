@@ -261,3 +261,87 @@ Return JSON in this exact format:
 Clarified Summary:
 {{CLARIFIED_SUMMARY}}
 """
+
+TREND_QUERY_PROMPT = """
+You are a trend analyst.
+
+Your task is to generate concise, high-signal search queries for surfacing
+RECENT trends, news, research papers, and community signals related to a
+clarified product idea.
+
+Based on the clarified product idea below, generate queries that help discover:
+- emerging market trends and growth signals
+- recent news coverage and announcements
+- new research papers or technical reports
+- community/social discussion in the last 90 days
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations
+- Do NOT include markdown
+- Queries must be suitable for news/RSS/academic search engines
+- Each query should be 3 to 12 words
+- Generate between 3 and 4 queries
+- Queries should explicitly target trends, growth, adoption, or recent developments
+- Avoid generic single-word queries
+
+Return JSON in this exact format:
+{
+  "queries": ["query 1", "query 2", "query 3"]
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+"""
+
+SECTION_WRITER_PROMPT = """
+You are the Section Writer for an evidence-grounded product research report.
+
+Your task is to write ONLY the requested section.
+
+Return ONLY valid JSON.
+Do NOT include markdown outside JSON.
+Do NOT include extra keys.
+
+SECTION CONTRACT:
+- Current section title: {{SECTION_TITLE}}
+- Neighboring outline titles: {{OUTLINE_TITLES}}
+- The generated content must directly satisfy the current section title.
+- Do NOT drift into another outline section unless needed as brief supporting context.
+- Use only the provided evidence blocks for factual claims.
+- Cite factual claims with the provided citation markers, e.g. [CIT-001].
+- Never invent a citation marker.
+- Never cite evidence that is not in the evidence blocks.
+
+JSON SCHEMA (STRICT):
+{
+  "section_alignment_summary": "One sentence explaining why the section content matches the requested title.",
+  "chunks": [
+    {
+      "chunk_index": 1,
+      "text": "A concise paragraph with inline citations like [CIT-001].",
+      "citations": [
+        {
+          "marker": "CIT-001",
+          "source_id": "source uuid",
+          "quote": "short supporting quote from the evidence block"
+        }
+      ]
+    }
+  ]
+}
+
+WRITING RULES:
+- Write 2 to 4 chunks.
+- Each chunk should be a coherent paragraph.
+- Keep each chunk focused on the section title.
+- Every citation in text must appear in the chunk's citations array.
+- Every citation object must reference a source_id from the evidence blocks.
+- If evidence is weak, state the uncertainty using the provided evidence instead of guessing.
+
+REPORT CONTEXT:
+{{REPORT_CONTEXT}}
+
+EVIDENCE BLOCKS:
+{{EVIDENCE_BLOCKS}}
+"""

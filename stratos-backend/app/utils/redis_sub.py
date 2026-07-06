@@ -47,3 +47,43 @@ def start_event_listener():
                 )
             finally:
                 db.close()
+
+        elif event_type == "research_done":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_research_done(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
+        elif event_type == "section_done":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_section_done(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
+        elif event_type == "sections_done":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_sections_done(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
+        elif event_type == "report_assembled":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_report_assembled(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()

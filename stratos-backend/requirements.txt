@@ -20,3 +20,5 @@ httpx
 groq
 tldextract
 google-search-results
+gdeltdoc
+feedparser

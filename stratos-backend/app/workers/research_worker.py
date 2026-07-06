@@ -95,6 +95,13 @@ def run_research(self, report_id: str):
                         snippet = result.get("snippet")
                         if snippet:
                             service.save_evidence(source.id, [snippet])
+                            service.save_to_astra(
+                                report_id=report_id,
+                                source_id=source.id,
+                                url=url,
+                                text=snippet,
+                                metadata={**result, "snippets": [snippet]},
+                            )
 
                         continue
 
@@ -127,7 +134,7 @@ def run_research(self, report_id: str):
                         source_id=source.id,
                         url=url,
                         text=full_text,
-                        metadata=result,
+                        metadata={**result, "snippets": snippets},
                     )
 
         publish_event("research_done", {"report_id": report_id})

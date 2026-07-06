@@ -10,7 +10,11 @@ from app.utils.redis_pub import publish_event
 from app.workers.clarification_worker import run_clarification
 from app.workers.outline_worker import run_outline
 from app.workers.research_worker import run_research
-# from app.workers.trend_worker import run_trend
+from app.workers.trend_worker import run_trend
+from app.workers.section_worker import run_section_writer
+from app.workers.assembler_worker import run_assembler
+from app.workers.export_worker import run_export
+from app.services.evidence_bundle_service import EvidenceBundleService
 # from app.workers.competitor_worker import run_competitor
 
 
@@ -219,5 +223,148 @@ class OrchestratorService:
         )
 
         run_research.delay(report.id)
-        # run_trend.delay(report.id)
+        run_trend.delay(report.id)
         # run_competitor.delay(report.id)
+
+    @staticmethod
+    def handle_research_done(
+        db: Session,
+        report_id: str,
+    ):
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        session = (
+            db.query(models.Session)
+            .filter_by(id=report.session_id)
+            .first()
+        )
+        if not session:
+            return
+
+        if session.status not in (
+            SessionState.RESEARCH_RUNNING,
+            SessionState.OUTLINE_GENERATED,
+        ):
+            return
+
+        sections = (
+            db.query(models.Section)
+            .filter_by(report_id=report_id)
+            .order_by(models.Section.order_index.asc())
+            .all()
+        )
+        if not sections:
+            publish_event(
+                "section_writing_failed",
+                {
+                    "session_id": session.id,
+                    "report_id": report.id,
+                    "error": "No sections found",
+                },
+            )
+            return
+
+        bundle_service = EvidenceBundleService(db=db)
+        bundles = bundle_service.generate_bundles_for_report(report_id)
+
+        session.status = SessionState.WRITING_SECTIONS
+        report.status = SessionState.WRITING_SECTIONS
+        db.commit()
+
+        publish_event(
+            "section_writing_started",
+            {
+                "session_id": session.id,
+                "report_id": report.id,
+                "section_count": len(sections),
+                "evidence_bundle_count": len(bundles),
+            },
+        )
+
+        for section in sections:
+            run_section_writer.delay(report.id, section.id)
+
+    @staticmethod
+    def handle_section_done(
+        db: Session,
+        report_id: str,
+    ):
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        session = (
+            db.query(models.Session)
+            .filter_by(id=report.session_id)
+            .first()
+        )
+        if not session or session.status != SessionState.WRITING_SECTIONS:
+            return
+
+        sections = (
+            db.query(models.Section)
+            .filter_by(report_id=report_id)
+            .order_by(models.Section.order_index.asc())
+            .all()
+        )
+        if not sections:
+            return
+
+        completed_section_ids = {
+            chunk.section_id
+            for chunk in (
+                db.query(models.Chunk)
+                .join(models.Section)
+                .filter(models.Section.report_id == report_id)
+                .all()
+            )
+        }
+        if len(completed_section_ids) < len(sections):
+            return
+
+        session.status = SessionState.READY_FOR_ASSEMBLY
+        report.status = SessionState.READY_FOR_ASSEMBLY
+        db.commit()
+
+        publish_event(
+            "sections_done",
+            {
+                "session_id": session.id,
+                "report_id": report.id,
+                "section_count": len(sections),
+            },
+        )
+
+    @staticmethod
+    def handle_sections_done(
+        db: Session,
+        report_id: str,
+    ):
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        run_assembler.delay(report_id)
+
+    @staticmethod
+    def handle_report_assembled(
+        db: Session,
+        report_id: str,
+    ):
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        session = (
+            db.query(models.Session)
+            .filter_by(id=report.session_id)
+            .first()
+        )
+        if session:
+            session.status = SessionState.READY_FOR_EXPORT
+        report.status = SessionState.READY_FOR_EXPORT
+        db.commit()
+
+        run_export.delay(report_id)

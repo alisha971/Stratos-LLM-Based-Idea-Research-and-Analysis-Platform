@@ -11,12 +11,14 @@ import requests
 from sqlalchemy.orm import Session
 from serpapi import GoogleSearch
 from typing import List, Dict
+from datetime import datetime
 
 from app.db import models
 from app.config import settings
 from app.utils.text_cleaner import clean_html
 from app.llm.client import generate_chat
 from app.llm.prompts import RESEARCH_QUERY_PROMPT
+from app.services.astra_evidence_repository import AstraEvidenceRepository
 import json
 
 import logging
@@ -40,6 +42,7 @@ BAD_PREFIXES = (
 class ResearchService:
     def __init__(self, db: Session):
         self.db = db
+        self.astra_repository = AstraEvidenceRepository()
 
     # --------------------------------------------------
     # Query generation
@@ -304,11 +307,37 @@ class ResearchService:
         metadata: dict,
     ):
         """
-        TODO:
-        - Insert into Astra 'evidence' collection
-        - Include full cleaned text
+        Fail-soft write to Astra `evidence`.
+        Postgres remains the source of relational metadata for MVP.
         """
-        pass
+        if not text:
+            return None
+
+        evidence_id = str(uuid.uuid4())
+        snippets = metadata.get("snippets") or []
+        document = {
+            "evidence_id": evidence_id,
+            "report_id": report_id,
+            "source_id": source_id,
+            "url": url,
+            "title": metadata.get("title"),
+            "domain": metadata.get("domain") or self._extract_domain(url),
+            "type": metadata.get("type", "web"),
+            "raw_text": text[:50000],
+            "snippets": snippets,
+            "metadata": metadata,
+            "ingestion_quality_score": self._ingestion_quality_score(
+                text=text,
+                snippets=snippets,
+            ),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+        saved_id = self.astra_repository.save_evidence_document(document)
+        if saved_id:
+            logger.debug("[ASTRA] Saved evidence_id=%s source_id=%s", saved_id, source_id)
+
+        return saved_id
 
     # --------------------------------------------------
     # Helpers
@@ -329,3 +358,36 @@ class ResearchService:
             len(t) >= 40 and
             not t.startswith(BAD_PREFIXES)
         )
+
+    def _ingestion_quality_score(self, text: str, snippets: list[str]) -> float:
+        haystack = " ".join([text[:3000], *snippets]).lower()
+        score = 1.0
+
+        useful_terms = (
+            "freelance",
+            "upwork",
+            "fiverr",
+            "client",
+            "hiring",
+            "job",
+            "telegram",
+            "discord",
+            "api",
+            "monitor",
+            "automation",
+            "llm",
+        )
+        score += sum(0.5 for term in useful_terms if term in haystack)
+
+        boilerplate_terms = (
+            "checking your browser",
+            "javascript is disabled",
+            "you signed in",
+            "you signed out",
+            "oops",
+            "free trial",
+            "no credit card",
+        )
+        score -= sum(1.0 for term in boilerplate_terms if term in haystack)
+
+        return max(score, 0.0)
