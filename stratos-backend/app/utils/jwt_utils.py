@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from app.config import settings
 
 def create_jwt(payload: dict):
-    payload["exp"] = datetime.utcnow() + timedelta(days=7)
+    now = datetime.utcnow()
+    payload["iat"] = now
+    payload["exp"] = now + timedelta(days=7)
     return jwt.encode(payload, settings.JWT_SECRET, settings.JWT_ALGO)
 
 def verify_jwt(token: str):

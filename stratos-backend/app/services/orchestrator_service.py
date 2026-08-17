@@ -368,3 +368,91 @@ class OrchestratorService:
         db.commit()
 
         run_export.delay(report_id)
+
+    # --------------------------------------------------
+    # Read models (report retrieval — contract §3.5/§3.6)
+    # --------------------------------------------------
+    @staticmethod
+    def list_reports(db: Session, user_id: str) -> list:
+        rows = (
+            db.query(models.Report, models.Session)
+            .join(models.Session, models.Report.session_id == models.Session.id)
+            .filter(models.Session.user_id == user_id)
+            .order_by(models.Report.created_at.desc())
+            .all()
+        )
+        return [
+            {
+                "report_id": report.id,
+                "session_id": session.id,
+                "idea_description": session.idea_description,
+                "status": report.status,
+                "created_at": (
+                    report.created_at.isoformat() if report.created_at else None
+                ),
+            }
+            for report, session in rows
+        ]
+
+    @staticmethod
+    def get_report_view(db: Session, report_id: str) -> dict:
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            raise HTTPException(404, "Report not found")
+
+        session = (
+            db.query(models.Session).filter_by(id=report.session_id).first()
+        )
+        idea = session.idea_description if session else report.topic
+
+        sections = (
+            db.query(models.Section)
+            .filter_by(report_id=report_id)
+            .order_by(models.Section.order_index.asc())
+            .all()
+        )
+
+        sections_view = []
+        for section in sections:
+            chunks = (
+                db.query(models.Chunk)
+                .filter_by(section_id=section.id)
+                .order_by(models.Chunk.chunk_index.asc())
+                .all()
+            )
+            chunks_view = []
+            for chunk in chunks:
+                citations = []
+                for citation in chunk.citations:
+                    source = citation.source
+                    citations.append(
+                        {
+                            "marker": citation.citation_marker,
+                            "url": source.url if source else None,
+                            "domain": source.domain if source else None,
+                            "title": source.domain if source else None,
+                        }
+                    )
+                chunks_view.append(
+                    {
+                        "chunk_id": chunk.id,
+                        "order_index": chunk.chunk_index,
+                        "text": chunk.chunk_text,
+                        "citations": citations,
+                    }
+                )
+            sections_view.append(
+                {
+                    "section_id": section.id,
+                    "title": section.title,
+                    "order_index": section.order_index,
+                    "chunks": chunks_view,
+                }
+            )
+
+        return {
+            "report_id": report.id,
+            "status": report.status,
+            "title": f"Market Research: {idea}" if idea else "Market Research Report",
+            "sections": sections_view,
+        }

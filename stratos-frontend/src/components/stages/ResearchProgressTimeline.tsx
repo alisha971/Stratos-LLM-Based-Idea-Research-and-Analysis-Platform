@@ -1,38 +1,52 @@
 import type { ProgressEvent } from "@/lib/state/chatFlowStore";
 
-type ResearchProgressTimelineProps = {
-  events: ProgressEvent[];
-};
-
-function marker(status: ProgressEvent["status"]): string {
-  if (status === "done") return "Done";
-  if (status === "error") return "Fail";
-  return "Run";
+function markerClass(status: ProgressEvent["status"]): string {
+  if (status === "done") return "text-moss";
+  if (status === "error") return "text-rust";
+  return "text-ink-faint";
 }
 
-export function ResearchProgressTimeline({ events }: ResearchProgressTimelineProps) {
+function markerLabel(status: ProgressEvent["status"]): string {
+  if (status === "done") return "done";
+  if (status === "error") return "failed";
+  return "working";
+}
+
+export function ResearchProgressTimeline({
+  events,
+}: {
+  events: ProgressEvent[];
+}) {
   return (
-    <section className="rounded-2xl border border-zinc-700 bg-zinc-900 p-5">
-      <h2 className="text-base font-semibold text-zinc-100">Research progress</h2>
+    <section className="border-t border-rule-strong pt-4">
+      <h2 className="font-mono text-[11px] uppercase tracking-wider text-ink-faint">
+        Research log
+      </h2>
       {events.length ? (
-        <ol className="mt-3 space-y-3">
+        <ol className="mt-3">
           {events.map((event) => (
-            <li key={event.id} className="flex items-start gap-3 text-sm">
-              <span className="rounded-md bg-zinc-700 px-2 py-1 text-[10px] text-zinc-200">
-                {marker(event.status)}
+            <li
+              key={event.id}
+              className="flex items-baseline gap-3 border-b border-rule py-2.5 text-sm last:border-b-0"
+            >
+              <span className="w-16 shrink-0 font-mono text-xs text-ink-faint">
+                {new Date(event.timestamp).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
               </span>
-              <div>
-                <p className="text-zinc-200">{event.label}</p>
-                <p className="text-xs text-zinc-500">
-                  {new Date(event.timestamp).toLocaleTimeString()}
-                </p>
-              </div>
+              <p className="flex-1 text-ink">{event.label}</p>
+              <span
+                className={`font-mono text-[11px] uppercase tracking-wider ${markerClass(event.status)}`}
+              >
+                {markerLabel(event.status)}
+              </span>
             </li>
           ))}
         </ol>
       ) : (
-        <p className="mt-3 text-sm text-zinc-400">
-          Waiting for backend progress events...
+        <p className="mt-3 font-serif text-sm italic text-ink-faint">
+          Setting up — the first entries land in a few seconds.
         </p>
       )}
     </section>

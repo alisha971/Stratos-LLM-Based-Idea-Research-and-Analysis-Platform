@@ -8,9 +8,11 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
+from app.config import settings
 from app.db import models
 from app.db.session import SessionLocal
 from app.utils.redis_pub import publish_event
+from app.utils.state_machine import SessionState
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ def run_export(self, report_id: str, file_type: str = "pdf"):
         if not report:
             raise ValueError("Report not found")
 
-        output_path = Path("exports") / f"{report_id}.pdf"
+        output_path = Path(settings.EXPORT_DIR) / f"{report_id}.pdf"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         sections = (
@@ -53,7 +55,7 @@ def run_export(self, report_id: str, file_type: str = "pdf"):
             file_url=str(output_path),
         )
         db.add(export_record)
-        report.status = "EXPORTED"
+        report.status = SessionState.EXPORTED.value
         db.commit()
         db.refresh(export_record)
 

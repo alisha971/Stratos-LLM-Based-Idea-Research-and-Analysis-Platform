@@ -25,6 +25,9 @@ Read the docs **in order** the first time. After that, jump to whichever doc mat
 | 11 | [Security Plan](11-SECURITY-PLAN.md) | Ordered security implementation: auth, secrets, SSRF, prompt injection, rate limits, privacy — with per-item tests | Any developer/AI agent, alongside phases B4+ |
 | 12 | [Developer Timeline](12-DEVELOPER-TIMELINE.md) | The week-by-week map for using this whole folder: which doc, which stage, which exit test | Whoever is implementing — read right after 01 |
 | 13 | [Technical Deep-Dive](13-TECHNICAL-DEEP-DIVE.md) | How the system actually works through SDE, agentic-AI, and RAG lenses: event architecture, ranking math, scraper funnel, the full citation lifecycle — with code citations | Anyone who must understand or defend the internals |
+| 14 | [Design Decisions (ADR)](14-DESIGN-DECISIONS.md) | Every significant decision: chose / instead of / why / trade-off / revisit-when — 22 decisions covering architecture, data, AI, security, infra | Anyone tempted to change an architectural choice — read the ADR first |
+| 15 | [Skills Guide](15-SKILLS-GUIDE.md) | The seven Cursor Agent Skills shipped in `.cursor/skills/` (task executor, contract guard, worker upgrade, security gate, LLM prompts, pipeline debug, deploy) and recipes for driving AI agents with them | Anyone using AI agents to implement this project |
+| — | [prompts/](prompts/README.md) | Verbatim, copy-paste prompt templates for every LLM call the worker plans introduce, each with output schema, validation rules, and fail-soft behavior | Smaller AI models / developers implementing the worker plans |
 | — | [workers/](workers/README.md) | Per-worker upgrade plans (W1–W9) to make each pipeline stage market-competitive and standalone-product-grade, each with its own testing checklist | Developers, after the base plan (Stage 5 of the timeline) |
 
 ## Sibling folders

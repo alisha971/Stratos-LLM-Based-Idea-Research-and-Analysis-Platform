@@ -26,6 +26,7 @@ class User(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     email = Column(String, unique=True, index=True, nullable=False)
+    google_sub = Column(String, unique=True, index=True, nullable=True)
     name = Column(String)
     picture_url = Column(String)
     created_at = Column(DateTime, server_default=func.now())

@@ -7,7 +7,6 @@
 # app/services/research_service.py
 
 import uuid
-import requests
 from sqlalchemy.orm import Session
 from serpapi import GoogleSearch
 from typing import List, Dict
@@ -15,6 +14,7 @@ from datetime import datetime
 
 from app.db import models
 from app.config import settings
+from app.utils.safe_fetch import BlockedRequestError, safe_get
 from app.utils.text_cleaner import clean_html
 from app.llm.client import generate_chat
 from app.llm.prompts import RESEARCH_QUERY_PROMPT
@@ -241,18 +241,8 @@ class ResearchService:
     # --------------------------------------------------
     def scrape_and_extract(self, url: str) -> tuple[list[str], str | None]:
         try:
-            resp = requests.get(
-                url,
-                timeout=10,
-                headers = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0 Safari/537.36"
-                    ),
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
-            )
+            # SSRF guard: internet-supplied URLs must go through safe_get.
+            resp = safe_get(url)
             if resp.status_code != 200:
                 logger.warning(
                     "Non-200 response (%s) for url=%s",
@@ -273,6 +263,9 @@ class ResearchService:
 
             return snippets, cleaned
 
+        except BlockedRequestError as exc:
+            logger.warning("Skipping blocked url=%s reason=%s", url, exc)
+            return [], None
         except Exception:
             logger.exception("Failed to scrape url=%s", url)
             return [], None

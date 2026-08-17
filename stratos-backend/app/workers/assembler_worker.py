@@ -4,9 +4,11 @@ import json
 import logging
 from pathlib import Path
 
+from app.config import settings
 from app.db import models
 from app.db.session import SessionLocal
 from app.utils.redis_pub import publish_event
+from app.utils.state_machine import SessionState
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -84,7 +86,7 @@ def run_assembler(self, report_id: str):
         draft_path.parent.mkdir(parents=True, exist_ok=True)
         draft_path.write_text(json.dumps(draft, indent=2), encoding="utf-8")
 
-        report.status = "READY_FOR_EXPORT"
+        report.status = SessionState.READY_FOR_EXPORT.value
         db.commit()
 
         publish_event(
@@ -111,4 +113,4 @@ def run_assembler(self, report_id: str):
 
 
 def _draft_path(report_id: str) -> Path:
-    return Path("exports") / f"{report_id}.json"
+    return Path(settings.EXPORT_DIR) / f"{report_id}.json"

@@ -2,13 +2,18 @@
 
 type PdfDownloadButtonProps = {
   onDownload: () => void;
+  disabled?: boolean;
 };
 
-export function PdfDownloadButton({ onDownload }: PdfDownloadButtonProps) {
+export function PdfDownloadButton({
+  onDownload,
+  disabled = false,
+}: PdfDownloadButtonProps) {
   return (
     <button
       onClick={onDownload}
-      className="rounded-lg border border-zinc-600 px-3 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+      disabled={disabled}
+      className="border border-rule-strong px-3 py-1.5 text-xs text-ink hover:bg-paper-sunken disabled:cursor-not-allowed disabled:opacity-40"
       title="Download PDF"
     >
       Download PDF

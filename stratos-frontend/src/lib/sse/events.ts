@@ -13,13 +13,18 @@ export type BackendEventType =
   | "research_failed"
   | "scanning_trends"
   | "trend_ready"
-  | "competitor_discovery"
-  | "competitor_done"
-  | "section_done"
+  | "trend_failed"
+  | "section_writing_started"
+  | "section_started"
   | "section_chunk"
-  | "report_ready_for_export"
+  | "section_done"
+  | "section_failed"
+  | "sections_done"
+  | "report_assembled"
+  | "assembler_failed"
+  | "embedding_skipped"
   | "export_done"
-  | "export_ready"
+  | "export_failed"
   | "unknown";
 
 export type StreamEnvelope = {

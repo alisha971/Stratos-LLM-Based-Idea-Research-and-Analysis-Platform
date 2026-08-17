@@ -14,7 +14,7 @@ describe("stage components", () => {
         onStartResearch={vi.fn()}
       />,
     );
-    expect(screen.getByText("Clarification complete")).toBeInTheDocument();
+    expect(screen.getByText("Here’s what I’ll research")).toBeInTheDocument();
     expect(screen.getByText("Summary text")).toBeInTheDocument();
   });
 
@@ -34,18 +34,43 @@ describe("stage components", () => {
     expect(screen.getByText("Research pipeline started")).toBeInTheDocument();
   });
 
-  it("renders read only final report panel", () => {
+  it("renders the final report with sections and citations", () => {
     render(
       <ReportSplitPanel
         finalReport={{
+          report_id: "rep-1",
+          status: "EXPORTED",
           title: "Final Market Research Report",
-          content: "Report body",
+          sections: [
+            {
+              section_id: "s1",
+              title: "Market Overview",
+              order_index: 0,
+              chunks: [
+                {
+                  chunk_id: "c1",
+                  order_index: 0,
+                  text: "The market is growing.",
+                  citations: [
+                    {
+                      marker: "CIT-001",
+                      url: "https://example.com",
+                      domain: "example.com",
+                      title: "Example",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
         }}
         sections={[]}
         onDownloadPdf={vi.fn()}
       />,
     );
     expect(screen.getByText("Final Market Research Report")).toBeInTheDocument();
-    expect(screen.getByText("Report body")).toBeInTheDocument();
+    expect(screen.getByText("Market Overview")).toBeInTheDocument();
+    expect(screen.getByText("The market is growing.")).toBeInTheDocument();
+    expect(screen.getByText("example.com")).toBeInTheDocument();
   });
 });

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stratos-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest tests -q
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grep for committed secrets (security §2)
+        run: |
+          if grep -REn '(sk_live|sk_test|whsec_|AKIA|ghp_)[A-Za-z0-9]' \
+            --include='*.*' --exclude='*.md' .; then
+            echo "Potential secret found"; exit 1;
+          fi
+          echo "No committed secrets found"
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stratos-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stratos-frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

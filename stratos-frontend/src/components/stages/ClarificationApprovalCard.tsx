@@ -10,23 +10,25 @@ export function ClarificationApprovalCard({
   onStartResearch,
 }: ClarificationApprovalCardProps) {
   return (
-    <section className="rounded-2xl border border-zinc-700 bg-zinc-900 p-5">
-      <h2 className="text-base font-semibold text-zinc-100">
-        Clarification complete
+    <section className="border-l-2 border-moss bg-paper-raised p-5">
+      <h2 className="font-mono text-[11px] uppercase tracking-wider text-ink-faint">
+        Here&rsquo;s what I&rsquo;ll research
       </h2>
-      <p className="mt-3 text-sm leading-6 text-zinc-300">{summary}</p>
-      <div className="mt-4 flex gap-2">
-        <button
-          onClick={onEdit}
-          className="rounded-lg border border-zinc-600 px-4 py-2 text-xs text-zinc-200 hover:bg-zinc-800"
-        >
-          Edit clarification
-        </button>
+      <p className="mt-3 font-serif text-base leading-relaxed text-ink">
+        {summary}
+      </p>
+      <div className="mt-5 flex items-baseline gap-4">
         <button
           onClick={onStartResearch}
-          className="rounded-lg bg-blue-500 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-400"
+          className="bg-moss px-5 py-2 text-sm text-paper hover:bg-moss-deep"
         >
-          Start research
+          Start the research
+        </button>
+        <button
+          onClick={onEdit}
+          className="text-sm text-ink-soft underline decoration-rule-strong underline-offset-4 hover:text-ink"
+        >
+          Not quite — edit
         </button>
       </div>
     </section>
