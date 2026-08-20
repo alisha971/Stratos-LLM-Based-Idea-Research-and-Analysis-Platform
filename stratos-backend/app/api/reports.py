@@ -8,7 +8,7 @@ from app.config import settings
 from app.db import models
 from app.db.session import get_db
 from app.services.orchestrator_service import OrchestratorService
-from app.utils.auth_dep import current_user_id
+from app.utils.auth_dep import current_user_id, current_user_id_or_query_token
 
 router = APIRouter(tags=["Reports"])
 
@@ -47,7 +47,10 @@ def get_report(
 def get_export_file(
     report_id: str,
     db: Session = Depends(get_db),
-    user_id: str = Depends(current_user_id),
+    # Browser navigation (window.open / <a>) can't attach an Authorization
+    # header, so this route also accepts the JWT as ?token= (same pattern
+    # as the SSE stream).
+    user_id: str = Depends(current_user_id_or_query_token),
 ):
     _owned_report(db, report_id, user_id)
 
@@ -62,7 +65,12 @@ def get_export_file(
 
     if settings.EXPORT_STORAGE == "r2":
         # Premium path (B6): file_url holds the object key; redirect to presigned URL.
-        from app.utils.storage import presigned_url
+        try:
+            from app.utils.storage import presigned_url
+        except ImportError:
+            raise HTTPException(
+                501, "R2 export storage is not implemented yet on this server"
+            )
 
         return RedirectResponse(url=presigned_url(export.file_url), status_code=302)
 

@@ -57,6 +57,18 @@ class Settings:
     def validate(self) -> None:
         """Fail fast on dangerous production misconfiguration (security §1)."""
         if self.ENV == "production":
+            if not self.GOOGLE_CLIENT_ID:
+                # Without this, google-auth would skip the audience check
+                # entirely and accept a valid Google ID token issued to ANY
+                # app -> account takeover via the email-fallback match in
+                # api/auth.py. (google_oauth.py also refuses to verify with
+                # no client id configured, in every environment, as a second
+                # layer -- this boot check just fails loudly in prod instead
+                # of silently disabling Google login.)
+                raise RuntimeError(
+                    "GOOGLE_CLIENT_ID is not set in production. Real Google "
+                    "sign-in cannot be verified safely without it."
+                )
             if self.JWT_SECRET == "supersecret":
                 raise RuntimeError(
                     "JWT_SECRET is still the default in production. "
