@@ -14,6 +14,12 @@ env/
 stratos-backend/.env
 stratos-backend/.env.*
 
+# ...but the templates MUST be committed — a fresh clone (and the Oracle VM
+# deploy) has nothing to copy from otherwise. These hold placeholders only.
+!.env.example
+!stratos-backend/.env.example
+!stratos-frontend/.env.example
+
 # Python cache / bytecode
 __pycache__/
 *.pyc
