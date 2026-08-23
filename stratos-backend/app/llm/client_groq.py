@@ -4,7 +4,7 @@ from typing import List, Dict
 
 _client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "openai/gpt-oss-20b"
 
 
 def generate_chat(messages: List[Dict[str, str]], temperature: float = 0.2) -> str:
