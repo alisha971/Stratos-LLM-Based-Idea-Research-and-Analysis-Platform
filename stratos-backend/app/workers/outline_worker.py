@@ -24,12 +24,7 @@ ALLOWED_OPTIONAL_SECTIONS = {
     "Go-To-Market Strategy",
 }
 
-@celery_app.task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=5,
-    retry_kwargs={"max_retries": 3},
-)
+@celery_app.task(bind=True)
 def run_outline(self, report_id: str):
     """
     TODO:
@@ -109,6 +104,13 @@ def run_outline(self, report_id: str):
                 "sections": sections,
             }
         )
+
+    except Exception as e:
+        publish_event(
+            "outline_failed",
+            {"report_id": report_id, "error": str(e)},
+        )
+        raise
 
     finally:
         db.close()

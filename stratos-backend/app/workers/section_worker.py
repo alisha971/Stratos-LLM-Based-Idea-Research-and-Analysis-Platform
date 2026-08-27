@@ -11,12 +11,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-@celery_app.task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=10,
-    retry_kwargs={"max_retries": 3},
-)
+@celery_app.task(bind=True)
 def run_section_writer(self, report_id: str, section_id: str):
     db = SessionLocal()
 

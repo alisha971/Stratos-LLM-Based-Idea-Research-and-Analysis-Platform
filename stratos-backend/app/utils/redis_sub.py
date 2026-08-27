@@ -58,6 +58,29 @@ def start_event_listener():
             finally:
                 db.close()
 
+        elif event_type == "trend_ready":
+            # Best-effort leg of the research fan-out (see
+            # research_join_service) -- section writing does not wait on
+            # this alone the way it waits on research_done.
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_trend_ready(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
+        elif event_type == "competitor_ready":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_competitor_ready(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
         elif event_type == "section_done":
             db = SessionLocal()
             try:
@@ -84,6 +107,23 @@ def start_event_listener():
                 OrchestratorService.handle_report_assembled(
                     db=db,
                     report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
+        # Catch-all: every event type ending in "_failed" (clarification,
+        # outline, research, trend, competitor, section, section_writing,
+        # assembler, export). Before this branch existed, none of these
+        # drove any state change -- a failure just stalled the session
+        # silently, forever. Placed last so it can never shadow one of the
+        # specific branches above (none of them end in "_failed").
+        elif event_type and event_type.endswith("_failed"):
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_stage_failed(
+                    db=db,
+                    event_type=event_type,
+                    payload=payload,
                 )
             finally:
                 db.close()

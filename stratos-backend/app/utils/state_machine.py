@@ -19,3 +19,9 @@ class SessionState(str, Enum):
     READY_FOR_ASSEMBLY = "READY_FOR_ASSEMBLY"
     READY_FOR_EXPORT = "READY_FOR_EXPORT"
     EXPORTED = "EXPORTED"
+    # Terminal, non-recoverable: reached when a pipeline stage publishes a
+    # *_failed event this state machine treats as fatal (see
+    # OrchestratorService.handle_stage_failed). Without this, a failed stage
+    # left the session/report parked wherever they were -- indistinguishable
+    # from "still running" to anyone watching.
+    FAILED = "FAILED"

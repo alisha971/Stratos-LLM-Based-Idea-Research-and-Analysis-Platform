@@ -26,6 +26,7 @@ for module_name in (
     "app.workers.research_worker",
     "app.workers.trend_worker",
     "app.workers.competitor_worker",
+    "app.workers.join_worker",
     "app.workers.section_worker",
     "app.workers.embedding_worker",
     "app.workers.assembler_worker",

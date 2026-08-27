@@ -64,6 +64,11 @@ class Report(Base):
     session_id = Column(String, ForeignKey("sessions.id"))
     topic = Column(String)
     status = Column(String, default="initializing")
+    # JSON-encoded list of research-fan-out legs ("trend"/"competitor") that
+    # had not resolved when the research_join timeout fired and section
+    # writing proceeded without them. NULL when all legs arrived normally.
+    # See scripts/add_pipeline_tracking_columns.py.
+    missing_research_legs = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
     session = relationship("Session", back_populates="reports")
