@@ -163,6 +163,16 @@ class Competitor(Base):
     name = Column(String)
     website = Column(String)
     summary = Column(Text)
+    tagline = Column(String)
+    target_customer = Column(String)
+    pricing_model = Column(String)
+    pricing_signal = Column(Text)
+    # Postgres Source row backing this competitor's citations (see
+    # CompetitorService.persist) — Citation.source_id is a FK to sources.id,
+    # so evidence about a competitor is only citable if this points at a
+    # real Source.
+    source_id = Column(String, ForeignKey("sources.id"))
+    created_at = Column(DateTime, server_default=func.now())
 
     report = relationship("Report", back_populates="competitors")
     features = relationship("CompetitorFeature", back_populates="competitor")

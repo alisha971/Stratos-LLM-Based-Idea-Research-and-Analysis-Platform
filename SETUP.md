@@ -10,6 +10,7 @@ Install the following first:
 - PostgreSQL (running on `localhost:5432`)
 - Redis (running on `localhost:6379`)
 - Optional but required for full workflow: valid API keys for Groq, SerpAPI, and Astra
+- Optional: a Product Hunt developer token (competitor worker's second discovery source — it runs on Hacker News alone without one)
 
 The backend uses FastAPI, Celery, SQLAlchemy, Redis, and Postgres.
 
@@ -101,6 +102,22 @@ Use this mapping when setting up on a fresh machine:
       [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
       ```
     - Paste the output as `JWT_SECRET=...`
+- `PRODUCT_HUNT_TOKEN` (optional)
+  - Source: Product Hunt API dashboard
+  - What it's for: one of two discovery sources for the competitor worker
+    (the other, Hacker News "Show HN", needs no key at all). Leave unset and
+    the worker runs on Hacker News alone — it degrades silently, it does not
+    fail.
+  - How to set:
+    - Sign in to your Product Hunt account
+    - Go to [api.producthunt.com/v2/oauth/applications](https://api.producthunt.com/v2/oauth/applications)
+    - Click "Add an application" (any name/redirect URL works — you're only
+      after the token, not doing a real OAuth flow)
+    - Copy the generated `developer_token` (it does not expire)
+    - Paste it as `PRODUCT_HUNT_TOKEN=...`
+  - Cost: free. No paid tier gate on this token — Product Hunt's own limits
+    are a query-complexity cap of 1000 and a rate limit that resets every 15
+    minutes, both far above what this worker uses per report.
 
 ### First-time `.env` template
 
@@ -118,6 +135,9 @@ ASTRA_DB_APPLICATION_TOKEN=<your_astra_application_token>
 
 GOOGLE_CLIENT_ID=<your_google_oauth_client_id>
 JWT_SECRET=<your_strong_random_secret>
+
+# Optional — competitor worker falls back to Hacker News alone if unset
+PRODUCT_HUNT_TOKEN=<your_product_hunt_developer_token>
 ```
 
 ### Security note for first-time setup
@@ -244,6 +264,15 @@ From `stratos-backend`:
 
 ```powershell
 python scripts/create_tables.py
+```
+
+On a database that existed before the competitor worker (i.e. anywhere this
+repo was set up earlier), also run the one-time column patch — safe to
+re-run, and a no-op on a fresh database where `create_tables.py` already
+created the columns:
+
+```powershell
+python scripts/add_competitor_columns.py
 ```
 
 ## 7) Run the Backend API

@@ -60,6 +60,22 @@ class AstraEvidenceRepository:
             logger.exception("[ASTRA] Failed to save trend item")
             return None
 
+    def save_competitor_insight(self, document: dict[str, Any]) -> str | None:
+        if not self.enabled:
+            return None
+
+        insight_id = document.get("insight_id")
+        payload = dict(document)
+        if insight_id:
+            payload.setdefault("_id", insight_id)
+
+        try:
+            self._collection("competitor_insights").insert_one(payload)
+            return insight_id
+        except Exception:
+            logger.exception("[ASTRA] Failed to save competitor insight")
+            return None
+
     def list_evidence(self, report_id: str, limit: int = 500) -> list[dict[str, Any]]:
         if not self.enabled:
             return []

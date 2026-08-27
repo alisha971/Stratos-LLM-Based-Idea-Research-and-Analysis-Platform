@@ -7,6 +7,10 @@ from pathlib import Path
 from app.config import settings
 from app.db import models
 from app.db.session import SessionLocal
+from app.services.competitor_service import (
+    COMPETITOR_COVERAGE_NOTE,
+    COMPETITOR_SECTION_TITLE,
+)
 from app.utils.redis_pub import publish_event
 from app.utils.state_machine import SessionState
 from app.workers.celery_app import celery_app
@@ -69,18 +73,39 @@ def run_assembler(self, report_id: str):
                 )
                 chunk_count += 1
 
-            assembled_sections.append(
-                {
-                    "section_id": section.id,
-                    "title": section.title,
-                    "order_index": section.order_index,
-                    "chunks": assembled_chunks,
-                }
-            )
+            section_dict = {
+                "section_id": section.id,
+                "title": section.title,
+                "order_index": section.order_index,
+                "chunks": assembled_chunks,
+            }
+
+            # Deterministic, LLM-free coverage caveat — the section writer is
+            # barred from discussing the research process, so this can't
+            # come from the model. Carried here so any export format can
+            # render it without re-deriving it. Never names the discovery
+            # platforms (product launch surfaces), only that coverage isn't
+            # exhaustive.
+            if section.title == COMPETITOR_SECTION_TITLE:
+                competitor_count = (
+                    db.query(models.Competitor)
+                    .filter_by(report_id=report_id)
+                    .count()
+                )
+                if competitor_count > 0:
+                    section_dict["coverage_note"] = COMPETITOR_COVERAGE_NOTE
+
+            assembled_sections.append(section_dict)
+
+        # Carried into the draft so the export layer can render an "Open
+        # Questions" block deterministically, even if the writing model
+        # under-delivered on them.
+        unresolved_gaps = _unresolved_gaps(db, report)
 
         draft = {
             "report_id": report_id,
             "sections": assembled_sections,
+            "unresolved_gaps": unresolved_gaps,
         }
         draft_path = _draft_path(report_id)
         draft_path.parent.mkdir(parents=True, exist_ok=True)

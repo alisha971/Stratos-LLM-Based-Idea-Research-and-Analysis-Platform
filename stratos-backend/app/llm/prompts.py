@@ -294,6 +294,108 @@ Clarified Summary:
 {{CLARIFIED_SUMMARY}}
 """
 
+COMPETITOR_TERMS_PROMPT = """
+You are a market analyst preparing to search product-launch directories for
+products that compete with a clarified product idea.
+
+Based on the clarified product idea below, identify:
+- a short product category label (2 to 5 words)
+- 3 to 5 search keywords that describe the category, suitable for matching
+  against product topic tags (e.g. "ai notetaker", "sales crm", "meeting
+  transcription")
+- a one-phrase description of the kind of product this is
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations or markdown
+- Keywords must be short (1 to 4 words each), generic to the category, and
+  NOT the product idea's own name or brand
+- Do NOT invent company or product names here
+
+Return JSON in this exact format:
+{
+  "category": "short category label",
+  "keywords": ["keyword 1", "keyword 2", "keyword 3"],
+  "product_kind": "one phrase"
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+"""
+
+COMPETITOR_RELEVANCE_PROMPT = """
+You are a market analyst filtering a list of candidate products down to the
+ones that genuinely compete with a clarified product idea.
+
+You will be given the clarified product idea and a list of candidates, each
+with only a name, a short tagline, and a domain. You have NOT verified these
+candidates yourself — treat the list as unconfirmed leads, not facts.
+
+Your task is to rank the candidates by how directly comparable they are to
+the described idea, and drop any that are clearly unrelated (wrong category,
+wrong audience, or just noise from a broad topic listing).
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations or markdown
+- Do NOT invent candidates that are not in the input list
+- Only reference candidates by their exact "id" field from the input
+- Return at most {{MAX_COMPETITORS}} ids, ordered most to least relevant
+
+Return JSON in this exact format:
+{
+  "relevant_ids": ["id-1", "id-2"]
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+
+Candidates:
+{{CANDIDATES}}
+"""
+
+COMPETITOR_PROFILE_PROMPT = """
+You are a market analyst writing a grounded profile of a single competing
+product, based ONLY on the homepage (and optional pricing page) text below.
+
+STRICT GROUNDING RULE: every field must be directly supported by the supplied
+text. If a field is not clearly supported, set it to null. Never guess,
+infer from the company name, or use outside knowledge. A null field is
+correct and expected when the page does not say.
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations or markdown
+- key_features: 3 to 5 short phrases, or fewer if the text does not support 5
+- differentiators: 1 to 3 short phrases describing what the page claims makes
+  it different, or an empty list if the text does not support any
+- pricing_model: one of "free", "freemium", "subscription", "usage-based",
+  "one-time", "enterprise/custom", or null if not stated
+- pricing_signal: a short quote or paraphrase of the actual pricing text, or
+  null if pricing_model is null
+
+Return JSON in this exact format:
+{
+  "name": "product name",
+  "tagline": "one-line tagline or null",
+  "target_customer": "who this is for, or null",
+  "key_features": ["feature 1", "feature 2"],
+  "pricing_model": "subscription",
+  "pricing_signal": "short quote or paraphrase, or null",
+  "differentiators": ["differentiator 1"]
+}
+
+Product name (from source, may be wrong — correct it if the page text says
+otherwise):
+{{CANDIDATE_NAME}}
+
+Homepage text:
+{{HOMEPAGE_TEXT}}
+
+Pricing page text (may be empty if unavailable):
+{{PRICING_TEXT}}
+"""
+
 SECTION_WRITER_PROMPT = """
 You are the Section Writer for an evidence-grounded product research report.
 
