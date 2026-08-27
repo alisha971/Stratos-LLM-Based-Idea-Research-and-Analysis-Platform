@@ -18,97 +18,77 @@ BOILERPLATE_TERMS = (
     "privacy policy",
 )
 
-OFF_TOPIC_TERMS = (
-    "crypto",
-    "dark web",
-    "malware",
-    "threat intelligence",
-    "supply chain attack",
-)
-
-SECTION_PREFERENCES = {
-    "problem": {
-        "freelancer",
-        "freelance",
-        "upwork",
-        "fiverr",
-        "competition",
-        "low-paying",
-        "client",
-        "job board",
-        "pain",
-        "workaround",
-    },
-    "persona": {
-        "freelancer",
-        "consultant",
-        "agency",
-        "solo",
-        "client",
-        "designer",
-        "developer",
-        "writer",
-    },
-    "solution": {
-        "alternative",
-        "platform",
-        "tool",
-        "solution",
-        "marketplace",
-        "job board",
-        "scraper",
-    },
-    "competitor": {
-        "competitor",
-        "alternative",
-        "pricing",
-        "feature",
-        "platform",
-        "upwork",
-        "fiverr",
-        "toptal",
-    },
-    "trend": {
-        "market",
-        "trend",
-        "growth",
-        "industry",
-        "news",
-        "adoption",
-        "freelance economy",
-    },
-    "opportunity": {
-        "gap",
-        "opportunity",
-        "differentiation",
-        "positioning",
-        "high-ticket",
-        "early",
-        "intent",
-    },
-    "risk": {
-        "risk",
-        "constraint",
-        "privacy",
-        "api",
-        "cost",
-        "scalability",
-        "compliance",
-        "spam",
-    },
-    "technical": {
-        "api",
-        "python",
-        "integration",
-        "telegram",
-        "discord",
-        "reddit",
-        "x",
-        "llm",
-        "monitor",
-        "webhook",
-        "automation",
-    },
+# Section RHETORICAL PURPOSE, in plain prose -- not a hand-tuned keyword
+# list for any one domain. This is the fix for the bug where the previous
+# SECTION_PREFERENCES/OFF_TOPIC_TERMS dicts were tuned against one
+# freelancer-tool test idea and silently applied to every report since: a
+# medical-residents meal-prep idea got scored against "upwork"/"fiverr"
+# vocabulary, and a fintech/security idea got its most relevant evidence
+# actively suppressed by OFF_TOPIC_TERMS penalizing "crypto"/"malware".
+#
+# All TOPICAL signal comes from `clarified_summary` overlap (per-report by
+# construction, see _score_item). These intent strings describe what a
+# section is rhetorically *for*, independent of what the idea is about, and
+# serve two purposes:
+#   1. Structural lexical terms below are extracted mechanically from them
+#      (via _keywords), never hand-picked per domain.
+#   2. They ARE the semantic query text for Stage 2's vector search --
+#      section_intent() is the public entry point EvidenceBundleService
+#      uses to ask Astra "what evidence looks like a match for this
+#      section's purpose", independent of ranking the section's title
+#      words directly (which would just re-embed "Risks & Open Questions").
+#
+# Keys are matched as substrings of the (lowercased) section title, same
+# lookup as before. Covers the 7 fixed CORE_SECTIONS plus the 3
+# ALLOWED_OPTIONAL_SECTIONS (see outline_worker.py) that have historically
+# been generated; a title matching none of these falls back to keyword
+# extraction from the title itself (_section_terms), same as before.
+SECTION_INTENTS: dict[str, str] = {
+    "problem": (
+        "the problem being solved, who experiences it, how painful it is, "
+        "and what workarounds people currently use"
+    ),
+    "persona": (
+        "who the target users are, their segment, context, and constraints"
+    ),
+    "solution": (
+        "existing solutions and alternatives already available, and their "
+        "strengths and weaknesses"
+    ),
+    "competitor": (
+        "named competitors, their pricing, features, and positioning in "
+        "the market"
+    ),
+    "trend": (
+        "market size, growth rate, adoption trends, and industry momentum"
+    ),
+    # "opportunit" (stem, not "opportunity") deliberately matches both
+    # "Opportunity" and "Opportunities" -- CORE_SECTIONS uses the plural
+    # ("Opportunities & Gaps"), and "opportunity" is NOT a substring of
+    # "opportunities" (...unity vs ...unities), so the singular form here
+    # silently never matched the actual outline section title. Same latent
+    # bug existed under this key in the pre-Stage-2 SECTION_PREFERENCES
+    # dict; caught here by test_evidence_ranker.py's round-trip test.
+    "opportunit": (
+        "gaps in the market, unmet needs, and opportunities for "
+        "differentiation"
+    ),
+    "risk": (
+        "risks, constraints, costs, compliance burden, and open questions "
+        "that could block this idea"
+    ),
+    "technical": (
+        "technical feasibility, integration requirements, and "
+        "implementation constraints"
+    ),
+    "regulatory": (
+        "regulatory requirements, compliance obligations, and legal "
+        "constraints"
+    ),
+    "go-to-market": (
+        "go-to-market strategy, distribution channels, and customer "
+        "acquisition approach"
+    ),
 }
 
 STOPWORDS = {
@@ -126,6 +106,18 @@ STOPWORDS = {
     "by",
     "from",
 }
+
+
+def section_intent(section_title: str) -> str:
+    """The natural-language description of what `section_title` is
+    rhetorically for -- used as the Stage 2 semantic search query. Falls
+    back to the title itself for a section that matches no known intent
+    (an LLM-invented optional title outside ALLOWED_OPTIONAL_SECTIONS)."""
+    normalized = section_title.lower()
+    for key, intent in SECTION_INTENTS.items():
+        if key in normalized:
+            return intent
+    return section_title
 
 
 class EvidenceRanker:
@@ -175,6 +167,26 @@ class EvidenceRanker:
             bundle_items.append(item)
 
         return bundle_items
+
+    def rank_ids_for_section(
+        self,
+        *,
+        clarified_summary: str,
+        section_title: str,
+        evidence_items: list[dict[str, Any]],
+        id_key: str = "evidence_id",
+    ) -> list[str]:
+        """Like rank_for_section, but returns just the ordered id list
+        (unlimited, no marker assignment) -- the shape Stage 2f's RRF fusion
+        needs as one of its two ranked lists. Items without an id under
+        `id_key` are skipped, since fusion needs a stable identifier."""
+        ranked = self.rank_for_section(
+            clarified_summary=clarified_summary,
+            section_title=section_title,
+            evidence_items=evidence_items,
+            limit=len(evidence_items) or 1,
+        )
+        return [item[id_key] for item in ranked if item.get(id_key)]
 
     def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
         quote = item.get("quote") or item.get("snippet") or item.get("text")
@@ -226,20 +238,14 @@ class EvidenceRanker:
             score -= len(penalties) * 2.0
             reasons.append("boilerplate_penalty")
 
-        off_topic = [term for term in OFF_TOPIC_TERMS if term in haystack]
-        if off_topic:
-            score -= len(off_topic) * 1.5
-            reasons.append("off_topic_penalty")
-
         return score, ";".join(reasons) or "generic_match"
 
     def _section_terms(self, section_title: str) -> set[str]:
-        normalized = section_title.lower()
-        for key, terms in SECTION_PREFERENCES.items():
-            if key in normalized:
-                return terms
+        return self._keywords(section_intent(section_title))
 
-        return self._keywords(section_title)
+    def keywords(self, text: str) -> set[str]:
+        """Public alias — other services score text against the same terms."""
+        return self._keywords(text)
 
     def _keywords(self, text: str) -> set[str]:
         return {

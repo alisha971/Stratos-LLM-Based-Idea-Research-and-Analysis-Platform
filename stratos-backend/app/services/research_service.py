@@ -16,6 +16,7 @@ from app.db import models
 from app.config import settings
 from app.utils.safe_fetch import BlockedRequestError, safe_get
 from app.utils.text_cleaner import clean_html
+from app.utils.chunking import chunk_text
 from app.llm.client import generate_chat
 from app.llm.prompts import RESEARCH_QUERY_PROMPT
 from app.services.astra_evidence_repository import AstraEvidenceRepository
@@ -26,18 +27,6 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
-BAD_PREFIXES = (
-    "home",
-    "menu",
-    "skip",
-    "search",
-    "login",
-    "sign up",
-    "subscribe",
-    "filter",
-    "where ?",
-)
 
 class ResearchService:
     def __init__(self, db: Session):
@@ -241,6 +230,15 @@ class ResearchService:
     # Scrape + extract
     # --------------------------------------------------
     def scrape_and_extract(self, url: str) -> tuple[list[str], str | None]:
+        """Returns (chunks, cleaned_text). `chunks` is the WHOLE page split
+        via chunk_text() (Stage 2a) -- deliberately not capped here the way
+        the old "first 5 valid lines" extraction was, since that discarded
+        everything below the fold (a market-research article's actual
+        figures are rarely in the intro). Selection now happens at
+        bundle-build time (EvidenceBundleService), which caps how many
+        chunks from any one source enter a section's bundle -- see
+        stratos-launch-plan Stage 2a.
+        """
         try:
             # SSRF guard: internet-supplied URLs must go through safe_get.
             resp = safe_get(url)
@@ -253,16 +251,9 @@ class ResearchService:
                 return [], None
 
             cleaned = clean_html(resp.text)
+            chunks = chunk_text(cleaned)
 
-            raw_lines = cleaned.split("\n")
-
-            snippets = [
-                line.strip()
-                for line in raw_lines
-                if self._is_valid_snippet(line)
-            ][:5]
-
-            return snippets, cleaned
+            return chunks, cleaned
 
         except BlockedRequestError as exc:
             logger.warning("Skipping blocked url=%s reason=%s", url, exc)
@@ -343,35 +334,33 @@ class ResearchService:
     # Evidence quality helpers
     # --------------------------------------------------
 
-    def _is_valid_snippet(self, text: str) -> bool:
-        if not text:
-            return False
-
-        t = text.strip().lower()
-        return (
-            len(t) >= 40 and
-            not t.startswith(BAD_PREFIXES)
-        )
-
     def _ingestion_quality_score(self, text: str, snippets: list[str]) -> float:
+        """A per-document quality signal, independent of any section or
+        idea -- NOT the per-section relevance ranking (see
+        evidence_ranker.py). `useful_terms` was previously a hand-tuned
+        lexicon for one freelancer-tool test idea ("upwork", "fiverr",
+        "telegram", "discord"), silently applied to every report since --
+        same bug class as SECTION_PREFERENCES/OFF_TOPIC_TERMS. Replaced
+        with structural markers of substantive, citable content -- present
+        regardless of topic -- rather than a domain-specific vocabulary.
+        """
         haystack = " ".join([text[:3000], *snippets]).lower()
         score = 1.0
 
-        useful_terms = (
-            "freelance",
-            "upwork",
-            "fiverr",
-            "client",
-            "hiring",
-            "job",
-            "telegram",
-            "discord",
-            "api",
-            "monitor",
-            "automation",
-            "llm",
+        substantive_markers = (
+            "according to",
+            "study",
+            "survey",
+            "report",
+            "data",
+            "research",
+            "analysis",
+            "market",
+            "growth",
+            "percent",
+            "%",
         )
-        score += sum(0.5 for term in useful_terms if term in haystack)
+        score += sum(0.5 for term in substantive_markers if term in haystack)
 
         boilerplate_terms = (
             "checking your browser",
