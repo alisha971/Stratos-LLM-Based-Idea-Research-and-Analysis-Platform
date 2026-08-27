@@ -139,6 +139,18 @@ Format per decision: **Chose / Instead of / Why / Trade-off accepted / Revisit w
 - **Trade-off:** monthly-counter quotas are crude (no rollover, no bursting).
 - **Revisit when:** usage patterns justify metered or credit-based pricing.
 
+### D24 — The first message always starts the session; greetings are handled as social turns by the worker *(implemented: 2026-08-23)*
+- **Chose:** `POST /orchestrate/start-session` accepts whatever the user first types (`min_length=1`), and the clarification worker's `message_intent` triage answers greetings/meta-questions as social turns. `session.idea_description` is provisional until the first `idea_content` message backfills it (reserved schema key `_idea_captured`).
+- **Instead of:** (a) a frontend gate answering greetings locally with canned text — built and reverted; (b) a separate pre-session social-chat endpoint.
+- **Why:** the local gate produced a visibly identical reply on every greeting ("hi" and "how are you" returned the same hardcoded line) and required a second, divergent code path. Worse, gating on *session existence* rather than message position let `"how are you"` fall through and seed a real session — and `idea_description` is user-visible, labelling the report in the reports list (`orchestrator_service.py:388`) and titling the report view (`:406`). One path, with LLM-generated social replies, removes both failure modes.
+- **Why it's affordable (the analysis worth keeping — don't re-derive it):**
+  - `START_SESSION_RATE` (5/hour) is consumed **once per conversation**, not per message: after message 1 a session exists, so every later message goes to `/orchestrate/clarification/chat` under `CLARIFICATION_CHAT_RATE` (60/hour). Greetings cannot exhaust the start-session limit.
+  - Per-user report quota is unaffected today — `reports_used_this_month` is not implemented yet (planned B5).
+  - `GLOBAL_DAILY_SESSION_CAP` (100/day) *is* consumed by a chit-chat-only conversation — one slot per conversation, bounded per user by the start-session limit. Knowingly accepted.
+  - No new worker logic was needed for a social *first* message: the social branch already handles an empty schema via `_social_pivot` → `IDEA_PIVOT_QUESTION`.
+- **Trade-off accepted:** abandoned greeting-only conversations leave `Session` + `Report` + `ChatMessage` rows and consume a daily-cap slot; every greeting costs one Groq clarification call instead of zero.
+- **Revisit when:** (a) **B5 quota work lands — the quota must be counted at consent, not at session creation**, or greeting-only conversations will burn a paid report; (b) junk sessions or daily-cap dilution become measurable — then move `enforce_global_daily_cap()` from `start_session` to `accept_consent`, since the real spend (SERP + section LLM calls) begins at research, not clarification.
+
 ## Infrastructure
 
 ### D19 — Managed services everywhere; two deployables from one Docker image *(planned: B7, doc 07)*

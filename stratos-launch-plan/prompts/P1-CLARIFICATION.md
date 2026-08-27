@@ -159,3 +159,18 @@ Return ONLY the full updated schema as JSON with exactly the fields listed above
 ## 5. Consent summary
 
 The existing summary prompt in `prompts.py` is kept. One addition to its rules: *"End with one sentence beginning 'We will research:' listing the 3 main research directions in plain words."* — this makes the consent card's promise concrete and improves consent-acceptance rates.
+
+---
+
+## 6. Message intent triage (live in `CLARIFICATION_CONTROLLER_PROMPT`)
+
+**Status: implemented** in the current controller prompt (`app/llm/prompts.py`), independent of the C1–C4 upgrade above. Carry it forward when C1–C4 replace the controller.
+
+The controller classifies every user message into a `message_intent` — `idea_content` | `greeting` | `meta_question` | `off_topic` — and returns two extra output fields: `message_intent` and `social_reply`. For non-`idea_content` (social) messages the prompt requires: one warm honest sentence in `social_reply`, schema repeated verbatim (no updates), and `next_question` set to the pending question. An IDENTITY & MEMORY block makes the model answer memory questions truthfully: no cross-session memory, full tracking within the session, never invent past conversations.
+
+**Enforcement is in the worker, not the prompt** (`clarification_worker.py`): social turns skip schema merge and unknown detection, are persisted with a `"social": true` flag, and are excluded from the `MAX_CLARIFICATION_TURNS` count. `MAX_TOTAL_MESSAGES = 20` is the absolute ceiling that stops unbounded chit-chat. The `clarification_update` SSE payload carries `message_intent` (contract doc 05 §4.1).
+
+**The first message may itself be social** — a session is created on whatever the user first types (doc 05 §3.1, `min_length=1`). Two worker rules follow from that, both keyed on the reserved schema key `_idea_captured`:
+
+- `session.idea_description` is provisional until the first `idea_content` message backfills it, because it is user-visible as the report's label and title.
+- `MAX_TOTAL_MESSAGES` only concludes the conversation once an idea has actually been captured. Otherwise pure small talk would mark all six fields unknown and run the research pipeline on "hi".

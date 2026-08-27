@@ -40,6 +40,8 @@ Response 200:
 
 Rate limit: 5/hour/user. Quota: counts against `reports_used_this_month`.
 
+`idea_description` has `min_length=1` (422 only on empty). **The first message may be a greeting rather than an idea** — the frontend sends it through unchanged and does not gate it. In that case `idea_description` is provisional: the clarification worker classifies the message as social (see §4.1 `message_intent`), replies without consuming a clarification turn, and backfills `idea_description` with the first `idea_content` message. Consumers that display it (reports list, report title) therefore see the real idea, not the greeting.
+
 ### 3.2 `POST /orchestrate/clarification/chat`
 
 Request: `{ "session_id": "…", "message": "B2C, US market, subscription" }`
@@ -128,12 +130,14 @@ Response 200:
 |---|---|---|
 | `session_created` | — | none (informational) |
 | `clarification_started` | — | timeline entry |
-| `clarification_update` | `question` (assistant's next question), `confidence` | append assistant chat message |
+| `clarification_update` | `mirror_summary`, `next_question`, `confidence_score`, `message_intent` (`"idea_content"` \| `"greeting"` \| `"meta_question"` \| `"off_topic"` — social intents are friendly redirects that do **not** consume a clarification turn) | append assistant chat message(s) |
 | `clarification_ready` | `summary` | internal (precedes consent request) |
 | `clarification_consent_requested` | `summary` | show consent card, stage → `awaitingConsent` |
 | `clarification_completed` | — | timeline entry |
+| `clarification_failed` | `error` | stage → `failed` |
 | `outline_accepted` | — | timeline entry |
 | `outline_ready` | `report_id`, `sections: [{section_id, title, order_index}]` (ids non-null) | store reportId, pre-render section skeletons |
+| `outline_failed` | `report_id`, `error` | stage → `failed` |
 | `research_started` | — | stage → `researching` |
 | `searching_sources` | `query` or `count` | timeline entry |
 | `research_done` | `sources_count` | timeline entry |
