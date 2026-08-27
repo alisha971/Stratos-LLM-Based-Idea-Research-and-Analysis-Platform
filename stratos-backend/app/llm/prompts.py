@@ -475,6 +475,25 @@ WRITING RULES:
 - Every citation object must reference a source_id from the evidence blocks.
 - If evidence is weak, state the uncertainty using the provided evidence instead of guessing.
 
+ABSENT INFORMATION (STRICT):
+- REPORT CONTEXT contains only established facts about the idea.
+- Do NOT speculate about, refer to, or draw attention to anything absent from it.
+- Never write that a detail is unknown, missing, unclear, pending, still to be
+  determined, or in need of research.
+- Never mention the research process, directives, or how this report was produced.
+- The single exception is the UNRESOLVED RESEARCH GAPS block below: when it is
+  non-empty, you MUST state those gaps.
+
+UNRESOLVED RESEARCH GAPS:
+- The list below is what the research stage searched for but could not establish.
+- If the list is empty ([]), ignore this block entirely and follow the rule above.
+- If it is non-empty, this IS the gaps section. Report each entry plainly as an
+  open question, in your own words, saying what could not be determined and why
+  it matters for this idea. Do not copy the wording verbatim, do not present a
+  gap as a finding, and do not invent evidence for it.
+
+{{UNRESOLVED_GAPS}}
+
 REPORT CONTEXT:
 {{REPORT_CONTEXT}}
 

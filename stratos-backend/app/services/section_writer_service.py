@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.llm.prompts import SECTION_WRITER_PROMPT
 from app.services.astra_evidence_repository import AstraEvidenceRepository
+from app.services.evidence_bundle_service import EvidenceBundleService
+from app.utils.clarification_schema import writer_view
 
 
 TITLE_KEYWORDS = {
@@ -38,6 +40,42 @@ STOPWORDS = {
     "on",
     "with",
 }
+
+# Terms that identify the outline's gaps section. "gap"/"gaps" is deliberately
+# excluded so "Opportunities & Gaps" — a findings section — does not match.
+GAPS_TITLE_TERMS = {
+    "risk",
+    "risks",
+    "open",
+    "question",
+    "questions",
+    "unknown",
+    "unknowns",
+    "limitation",
+    "limitations",
+}
+
+
+def _looks_like_gaps_title(title: str) -> bool:
+    words = set(re.findall(r"[a-z]+", (title or "").lower()))
+    return bool(words & GAPS_TITLE_TERMS)
+
+
+def is_gaps_section(title: str, outline_sections: list[Any]) -> bool:
+    """Whether this section should carry what research could not establish.
+
+    The outline prompt mandates a "Risks & Open Questions" section, but the
+    model can rename it. If nothing in the outline looks like one, the last
+    section carries the gaps rather than dropping them.
+    """
+    if _looks_like_gaps_title(title):
+        return True
+
+    titles = [section.title for section in outline_sections]
+    if any(_looks_like_gaps_title(item) for item in titles):
+        return False
+
+    return bool(titles) and titles[-1] == title
 
 
 class SectionWriterService:
@@ -81,11 +119,14 @@ class SectionWriterService:
 
         citation_map = self._build_citation_marker_map(evidence_items)
 
-        return {
+        context = {
             "report": {
                 "id": report.id,
                 "topic": report.topic,
-                "clarified_summary": session.clarified_summary,
+                # Projected: established idea facts only. Research scaffolding
+                # (directives, knowledge gaps, unresolved fields) is dropped so
+                # the writer cannot quote it back as if it were a finding.
+                "clarified_summary": writer_view(session.clarified_summary),
             },
             "section": {
                 "id": section.id,
@@ -97,6 +138,17 @@ class SectionWriterService:
             "citation_map": citation_map,
             "source_mode": "astra" if astra_items else "postgres_fallback",
         }
+
+        # The gaps section is the one place research shortfalls belong: it is
+        # told what could not be established so the report says so plainly
+        # instead of quietly omitting it.
+        if is_gaps_section(section.title, outline_sections):
+            context["unresolved_gaps"] = EvidenceBundleService(
+                self.db,
+                astra_repository=self.astra_repository,
+            ).unresolved_directives(report_id, session.clarified_summary)
+
+        return context
 
     def generate_section_draft(
         self,
@@ -378,6 +430,10 @@ class SectionWriterService:
                 json.dumps(context["report"], indent=2),
             )
             .replace("{{EVIDENCE_BLOCKS}}", "\n\n".join(evidence_blocks))
+            .replace(
+                "{{UNRESOLVED_GAPS}}",
+                json.dumps(context.get("unresolved_gaps") or [], indent=2),
+            )
         )
 
     def _parse_json(self, raw_output: str) -> dict[str, Any]:

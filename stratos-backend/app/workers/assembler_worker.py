@@ -121,6 +121,7 @@ def run_assembler(self, report_id: str):
                 "section_count": len(assembled_sections),
                 "chunk_count": chunk_count,
                 "draft_path": str(draft_path),
+                "unresolved_count": len(unresolved_gaps),
             },
         )
 
@@ -135,6 +136,28 @@ def run_assembler(self, report_id: str):
         raise
     finally:
         db.close()
+
+
+def _unresolved_gaps(db, report) -> list[str]:
+    """What research could not establish. Never fatal — a gap in the gap list
+    must not fail an otherwise complete report."""
+    try:
+        session = db.query(models.Session).filter_by(id=report.session_id).first()
+        if not session or not session.clarified_summary:
+            return []
+
+        from app.services.evidence_bundle_service import EvidenceBundleService
+
+        return EvidenceBundleService(db).unresolved_directives(
+            report.id,
+            session.clarified_summary,
+        )
+    except Exception:
+        logger.exception(
+            "[ASSEMBLER] Could not compute unresolved gaps for report_id=%s",
+            report.id,
+        )
+        return []
 
 
 def _draft_path(report_id: str) -> Path:
