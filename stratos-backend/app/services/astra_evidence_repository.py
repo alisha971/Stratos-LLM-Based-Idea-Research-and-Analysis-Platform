@@ -135,6 +135,60 @@ class AstraEvidenceRepository:
             logger.exception("[ASTRA] Failed to get evidence bundle")
             return None
 
+    # --------------------------------------------------
+    # Vector collection (gap-closing plan Stage 2b/2c/2d)
+    #
+    # Separate collection from `evidence`/`trend_items`/`competitor_insights`
+    # above -- those hold the raw ingested documents; `embeddings` holds
+    # chunked, vectorized evidence for semantic ranking. Also deliberately
+    # separate from any future report-OUTPUT chunk collection: mixing input
+    # evidence and a report's own written chunks in one collection would let
+    # a query that forgets a content_type filter pull the section writer's
+    # own text back in as if it were fresh evidence. See EmbeddingService
+    # for the provider/model this collection is configured with, and
+    # scripts/ensure_astra_collections.py for how it gets created.
+    # --------------------------------------------------
+    def save_embedding_chunk(self, document: dict[str, Any]) -> str | None:
+        if not self.enabled:
+            return None
+
+        chunk_id = document.get("_id")
+        try:
+            self._collection("embeddings").insert_one(dict(document))
+            return chunk_id
+        except Exception:
+            logger.exception("[ASTRA] Failed to save embedding chunk")
+            return None
+
+    def find_similar_embeddings(
+        self,
+        report_id: str,
+        query_text: str,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """Vector search scoped to one report, ranked by similarity to
+        `query_text`. Both the stored chunks and this query are embedded
+        server-side by Astra's `$vectorize` using the same model, so no
+        local embedding call or prefix handling is needed on either side.
+        Returns [] on any failure (Astra down, collection not yet created,
+        NVIDIA endpoint hiccup) -- callers fall back to lexical-only
+        ranking, per Stage 2d's rule."""
+        if not self.enabled or not query_text or not query_text.strip():
+            return []
+
+        try:
+            cursor = self._collection("embeddings").find(
+                {"report_id": report_id},
+                sort={"$vectorize": query_text},
+                limit=limit,
+            )
+            return [dict(item) for item in cursor]
+        except Exception:
+            logger.exception(
+                "[ASTRA] Vector search failed for report_id=%s", report_id
+            )
+            return []
+
     def fetch_evidence(self, report_id: str, section_title: str) -> list[dict[str, Any]]:
         bundle = self.get_evidence_bundle(
             report_id=report_id,
