@@ -51,7 +51,7 @@
 
 ## Day 9 — Deploy
 
-- Follow the deployment guide (doc 07) Parts 2–6 with fast-ship deltas: **one** Railway service (not two), a Railway volume mounted at `/app/exports`, skip R2 entirely, skip anything billing-related. Neon + Railway Redis + Vercel + domain + OAuth origins.
+- **Hosting decision: Oracle Cloud Always Free, not Railway** — follow [05-ORACLE-DEPLOY.md](05-ORACLE-DEPLOY.md) (one Always Free ARM VM, no trial/expiry, running API + worker + Redis via docker-compose, PDFs on the VM disk, skip R2 entirely, skip anything billing-related). Doc 07 still applies for GitHub/Neon/Astra (Parts 2–3), Vercel (Part 5), and domain + OAuth origins (Part 6); its Railway Part 4 is replaced by doc 05 here.
 - **Exit test:** `https://api.yourdomain.com/healthz` → ok; frontend loads on your domain; Google login works in production.
 
 ## Day 10 — Production shakedown

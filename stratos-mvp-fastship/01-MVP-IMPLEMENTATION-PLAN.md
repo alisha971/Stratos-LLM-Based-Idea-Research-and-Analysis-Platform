@@ -37,7 +37,7 @@ Do 2.4. The shortcut in 2.3 exists only if you're desperately behind schedule.
 
 | # | Task | Verify |
 |---|---|---|
-| 3.1 | **[SHORTCUT] Single-container deploy.** One Dockerfile (premium B7.2) plus a `start.sh` that launches BOTH processes: `uvicorn app.main:app --host 0.0.0.0 --port 8000 & celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 & wait -n`. One Railway service instead of two. This is why local-disk PDFs (1.6) work — API and worker share a filesystem. Premium B7.2/B6 splits them later. Add a mounted volume for `exports/` on Railway so PDFs survive restarts. | container runs locally: `docker run` → healthz + a celery banner in logs |
+| 3.1 | **[SHORTCUT] Single-container deploy.** One Dockerfile (premium B7.2) plus a `start.sh` that launches BOTH processes: `uvicorn app.main:app --host 0.0.0.0 --port 8000 & celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 & wait -n`. One server instead of two — deployed to an Oracle Cloud Always Free ARM VM (see `05-ORACLE-DEPLOY.md`; replaces the original Railway plan). This is why local-disk PDFs (1.6) work — API and worker share a filesystem. Premium B7.2/B6 splits them later. Bind-mount `exports/` to the VM disk so PDFs survive container rebuilds. | container runs locally: `docker run` → healthz + a celery banner in logs |
 | 3.2 | docker-compose for local postgres+redis | B7.1 | compose up + create_tables works |
 | 3.3 | CI: single GitHub Actions job — backend tests + frontend `npm test && npm run build` | B7.4 (merged into one job) | green on push |
 | 3.4 | Smoke script | B8.1 | prints PASS |

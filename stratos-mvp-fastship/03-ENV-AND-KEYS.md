@@ -38,8 +38,8 @@ via the literal `dev` token). This bypass is force-disabled in production.
 |---|---|---|
 | `ENV` | Yes | `development` locally, `production` on the server. Production turns on the boot-time safety guards below. |
 | `DATABASE_URL` | Yes | Postgres connection string. **Local:** the docker-compose default `postgresql://stratos:stratos@localhost:5432/stratos`. **Prod:** create a free Postgres at [neon.tech](https://neon.tech) → copy its connection string. |
-| `REDIS_BROKER_URL` | Yes | Celery broker. **Local:** `redis://localhost:6379/0` (docker-compose). **Prod:** Railway Redis plugin URL, append `/0`. |
-| `REDIS_PUBSUB_URL` | Yes | SSE pub/sub (a *different* Redis DB number). **Local:** `redis://localhost:6379/1`. **Prod:** same Railway Redis URL, append `/1`. |
+| `REDIS_BROKER_URL` | Yes | Celery broker. **Local:** `redis://localhost:6379/0` (docker-compose). **Prod (Oracle, doc 05):** `redis://redis:6379/0` — the Redis container in the same compose network. |
+| `REDIS_PUBSUB_URL` | Yes | SSE pub/sub (a *different* Redis DB number). **Local:** `redis://localhost:6379/1`. **Prod (Oracle):** `redis://redis:6379/1`. |
 | `GROQ_API_KEY_1` | Yes | LLM inference. Get it free at [console.groq.com/keys](https://console.groq.com/keys). Powers clarification, outline, research queries, and section writing. |
 | `GROQ_API_KEY_2` | Yes | A second Groq key on a *separate* account. `app/llm/client.py` uses the two as a fallback pool — one primary, the other on rate-limit/API failure — roughly doubling the effective daily token quota. (The code still reads these as `GROQ_API_KEY_ALISHA` / `GROQ_API_KEY_ENCRIL`; rename pending.) |
 | `SERP_API_KEY` | Yes | Web search for the research worker. Sign up at [serpapi.com](https://serpapi.com) → API key (free tier ~100 searches/mo). |
@@ -53,7 +53,7 @@ via the literal `dev` token). This bypass is force-disabled in production.
 | `DEV_AUTH_BYPASS` | Dev only | `true` locally to enable the `dev` token. **Must be `false`/absent in production** — the app refuses to boot if it's `true` while `ENV=production`. |
 | `FRONTEND_ORIGIN` | Yes | Exact origin allowed by CORS. **Local:** `http://localhost:3000`. **Prod:** your Vercel/frontend URL (e.g. `https://stratos.yourdomain.com`), no trailing slash. |
 | `EXPORT_STORAGE` | Yes | `local` for fast-ship (PDFs served from disk). `r2` only after the premium object-storage task. |
-| `EXPORT_DIR` | Optional | Where PDFs are written; default `exports`. In prod mount a Railway volume here so PDFs survive restarts. |
+| `EXPORT_DIR` | Optional | Where PDFs are written; default `exports`. In prod the container path `/app/exports` is bind-mounted to the Oracle VM disk (doc 05) so PDFs survive rebuilds. |
 | `START_SESSION_RATE` | Optional | Per-user start-session limit; default `5/hour`. |
 | `CLARIFICATION_CHAT_RATE` | Optional | Per-user chat limit; default `60/hour`. |
 | `GLOBAL_DAILY_SESSION_CAP` | Optional | Wallet seatbelt — total sessions/day across all users; default `100`. 503 past it. |
@@ -100,9 +100,9 @@ Services in-page and verifies the ID token server-side.)
 
 | Platform | What goes there |
 |---|---|
-| **Railway** (backend, single service running API + worker) | All backend `.env` values as service variables. Mount a volume at `/app/exports`. |
+| **Oracle VM** (backend, single compose stack running API + worker + Redis — see doc 05) | All backend `.env` values in `stratos-backend/.env` on the VM (chmod 600, never committed). PDFs bind-mounted to `/srv/stratos/exports`. |
 | **Neon** | Provides `DATABASE_URL`. |
-| **Railway Redis** | Provides the base URL for `REDIS_BROKER_URL` (`/0`) and `REDIS_PUBSUB_URL` (`/1`). |
+| **Redis container on the VM** | `REDIS_BROKER_URL=redis://redis:6379/0`, `REDIS_PUBSUB_URL=redis://redis:6379/1`. |
 | **Vercel** (frontend) | `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_GOOGLE_CLIENT_ID`. |
 | **Groq / SerpAPI / DataStax / Google Cloud** | Where you generate the keys above. |
 
