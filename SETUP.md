@@ -318,21 +318,16 @@ From `stratos-backend`:
 
 ```powershell
 & "..\venv\Scripts\Activate.ps1"
-celery -A app.worker.celery_app worker --loglevel=info --pool=solo
+celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 ```
 
 Note: `--pool=solo` is recommended on Windows.
 
-## Known Blocker
-
-`app/workers/celery_app.py` currently imports several worker modules that are not present in this repository (`trend_worker`, `competitor_worker`, `section_worker`, `embedding_worker`, `assembler_worker`, `export_worker`).
-
-If these files are still missing, Celery startup can fail.
-
-Possible resolutions:
-
-- Comment out missing imports in `app/workers/celery_app.py` for now, or
-- Add the missing worker modules before running Celery
+On startup, look for `app.workers.competitor_worker.run_competitor` (and the
+other pipeline stages) in Celery's registered-tasks banner to confirm every
+worker loaded. `celery_app.py` tolerates a genuinely missing module (logs and
+continues) so a typo or partial checkout fails quietly — check the banner if
+a stage never fires.
 
 ## Quick Run Checklist
 
