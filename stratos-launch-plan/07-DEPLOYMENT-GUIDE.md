@@ -1,5 +1,6 @@
 # 07 — Deployment Guide (Click-by-Click)
 
+> **⚠ Hosting decision (2026-08-21):** the fast-ship launch uses **Oracle Cloud Always Free, not Railway** — see `../stratos-mvp-fastship/05-ORACLE-DEPLOY.md`, which replaces Part 4 of this guide (backend hosting). Parts 1–3 and 5–8 (local verify, GitHub, Neon/Astra, Vercel, domain, smoke test) still apply as written.
 > Written so a person who has never deployed anything can follow it. Do things **in this exact order**. Prerequisites: the code work in docs 03 and 04 is done (at minimum phases B1–B7 and F1–F3), and you completed the sign-ups in doc 06 (Groq, SerpAPI, Astra, Neon, Cloudflare R2, Google OAuth, Sentry, a domain, GitHub account).
 >
 > Time needed: ~2–3 hours the first time. Nothing here is dangerous; everything is undoable.

@@ -33,6 +33,7 @@ There are two plans in this repo. Pick one deliberately:
 | [02-SHIP-TIMELINE.md](02-SHIP-TIMELINE.md) | Day-by-day schedule for the ~2 weeks, with daily exit tests |
 | [03-ENV-AND-KEYS.md](03-ENV-AND-KEYS.md) | Every API key / env var, where to get it, and where to put it |
 | [04-BUILD-SUMMARY-AND-RUNBOOK.md](04-BUILD-SUMMARY-AND-RUNBOOK.md) | What was implemented + step-by-step manual run & test guide |
+| [05-ORACLE-DEPLOY.md](05-ORACLE-DEPLOY.md) | **Hosting decision: Oracle Cloud Always Free** — replaces the Railway parts of the premium deployment guide |
 
 ## Ground rules (same as the premium plan)
 
