@@ -78,3 +78,6 @@ stratos-backend/exports/
 # Celery / runtime artifacts
 celerybeat-schedule
 celerybeat.pid
+
+# Personal build notes — local only, never committed
+stratos-devlog/
