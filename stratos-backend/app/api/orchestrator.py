@@ -18,7 +18,10 @@ router = APIRouter(tags=["Orchestrator"])
 # Request models (JSON bodies — B1.2)
 # ------------------------------------------------------------------
 class StartSessionRequest(BaseModel):
-    idea_description: str = Field(min_length=3, max_length=settings.MAX_TEXT_LENGTH)
+    # min_length=1: the first message may be a greeting ("hi") rather than an
+    # idea. The clarification worker classifies it as social and backfills
+    # idea_description once a real idea arrives.
+    idea_description: str = Field(min_length=1, max_length=settings.MAX_TEXT_LENGTH)
 
 
 class ChatRequest(BaseModel):
