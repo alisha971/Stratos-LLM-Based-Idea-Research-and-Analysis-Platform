@@ -9,6 +9,7 @@ import { MessageList } from "@/components/chat/MessageList";
 import { ReportSplitPanel } from "@/components/report/ReportSplitPanel";
 import { ClarificationApprovalCard } from "@/components/stages/ClarificationApprovalCard";
 import { ResearchProgressTimeline } from "@/components/stages/ResearchProgressTimeline";
+import type { ReportView } from "@/lib/api/orchestratorClient";
 import {
   ApiError,
   acceptConsent,
@@ -61,6 +62,8 @@ function friendlyError(err: unknown): string {
     if (err.status === 429) return "You're going a bit fast — please wait a minute and retry.";
     if (err.status === 503) return "We've hit today's capacity. Please try again tomorrow.";
     if (err.status === 401) return "Your session expired. Please sign in again.";
+    if (err.status === 422)
+      return "Tell me a bit more about your idea — a sentence or two is perfect.";
   }
   return err instanceof Error ? err.message : "Something went wrong.";
 }
@@ -74,12 +77,14 @@ export function ChatShell() {
   const router = useRouter();
   const reportFetched = useRef(false);
 
-  // Auto-open the report panel once the finished report arrives (Claude-artifact behavior).
-  useEffect(() => {
-    if (state.finalReport) {
-      setReportOpen(true);
-    }
-  }, [state.finalReport]);
+  // Auto-open the report panel once the finished report arrives (Claude-artifact
+  // behavior). Adjusted during render rather than in an effect so it opens in the
+  // same pass the report lands, and only on arrival — the user can still close it.
+  const [openedReport, setOpenedReport] = useState<ReportView | null>(null);
+  if (state.finalReport && state.finalReport !== openedReport) {
+    setOpenedReport(state.finalReport);
+    setReportOpen(true);
+  }
 
   const onAction = useCallback((action: ChatFlowAction) => dispatch(action), []);
 

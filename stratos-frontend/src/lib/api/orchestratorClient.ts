@@ -154,7 +154,10 @@ export async function fetchReport(reportId: string): Promise<ReportView> {
 }
 
 export function getExportFileUrl(reportId: string): string {
-  return `${API_BASE_URL}/exports/${reportId}/file`;
+  // Plain browser navigation (window.open) can't set an Authorization
+  // header, so the JWT rides as ?token= — same pattern as the SSE stream.
+  const token = authToken ? `?token=${encodeURIComponent(authToken)}` : "";
+  return `${API_BASE_URL}/exports/${reportId}/file${token}`;
 }
 
 export function streamUrl(sessionId: string, token: string): string {
