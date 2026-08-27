@@ -40,6 +40,13 @@ class Settings:
     # --- Research ---
     SERP_API_KEY = os.getenv("SERP_API_KEY")
 
+    # --- Competitors ---
+    # Free, non-expiring developer token from the Product Hunt API dashboard.
+    # Optional: the competitor worker degrades to Hacker News (Show HN) only
+    # when unset, it never hard-fails.
+    PRODUCT_HUNT_TOKEN = os.getenv("PRODUCT_HUNT_TOKEN")
+    COMPETITOR_MAX = int(os.getenv("COMPETITOR_MAX", "7"))
+
     # --- Exports / storage ---
     # local -> serve PDFs from disk (fast-ship). r2 -> presigned object storage (premium).
     EXPORT_STORAGE = os.getenv("EXPORT_STORAGE", "local")

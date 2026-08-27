@@ -172,6 +172,9 @@ function buildProgressLabel(eventType: string): string {
     scanning_trends: "Scanning trend signals",
     trend_ready: "Trend analysis completed",
     trend_failed: "Trend scan failed (continuing without trends)",
+    scanning_competitors: "Scanning competitor landscape",
+    competitor_ready: "Competitor analysis completed",
+    competitor_failed: "Competitor scan failed (continuing without competitors)",
     section_writing_started: "Writing sections",
     sections_done: "All sections written",
     report_assembled: "Assembling report",
@@ -190,6 +193,9 @@ const RESEARCH_PROGRESS_EVENTS = new Set([
   "scanning_trends",
   "trend_ready",
   "trend_failed",
+  "scanning_competitors",
+  "competitor_ready",
+  "competitor_failed",
   "section_writing_started",
   "sections_done",
   "report_assembled",
@@ -320,9 +326,11 @@ export function eventToActions(event: StreamEnvelope): ChatFlowAction[] {
   }
 
   if (event.type.includes("failed")) {
-    // trend_failed is non-fatal: the pipeline continues without trend items.
+    // trend_failed and competitor_failed are non-fatal: the pipeline
+    // continues without trend items / competitors.
+    const NON_FATAL_FAILURES = new Set(["trend_failed", "competitor_failed"]);
     const errorMessage = stringValue(payload.error) || `${event.type}`;
-    if (event.type !== "trend_failed") {
+    if (!NON_FATAL_FAILURES.has(event.type)) {
       actions.push({ type: "SET_ERROR", error: errorMessage });
       actions.push({ type: "SET_STAGE", stage: "failed" });
     }

@@ -141,6 +141,9 @@ Response 200:
 | `scanning_trends` | — | timeline entry |
 | `trend_ready` | `items_count` | timeline entry |
 | `trend_failed` | `error` | timeline warning (pipeline continues) |
+| `scanning_competitors` | — | timeline entry |
+| `competitor_ready` | `competitors_count`, `verified_count`, `dropped_count` | timeline entry |
+| `competitor_failed` | `error` | timeline warning (pipeline continues) |
 | `section_writing_started` | `sections_total` | stage → `streamingSections` |
 | `section_started` | `section_id`, `title` | highlight active section |
 | `section_chunk` | `section_id`, `text` (delta) | **append** to section's partial text |

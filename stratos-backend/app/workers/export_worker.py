@@ -11,6 +11,10 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from app.config import settings
 from app.db import models
 from app.db.session import SessionLocal
+from app.services.competitor_service import (
+    COMPETITOR_COVERAGE_NOTE,
+    COMPETITOR_SECTION_TITLE,
+)
 from app.utils.redis_pub import publish_event
 from app.utils.state_machine import SessionState
 from app.workers.celery_app import celery_app
@@ -47,7 +51,10 @@ def run_export(self, report_id: str, file_type: str = "pdf"):
         if not sections:
             raise ValueError("No sections found")
 
-        _render_pdf(output_path, report, sections)
+        competitor_count = (
+            db.query(models.Competitor).filter_by(report_id=report_id).count()
+        )
+        _render_pdf(output_path, report, sections, competitor_count)
 
         export_record = models.ExportRecord(
             report_id=report_id,
@@ -82,7 +89,12 @@ def run_export(self, report_id: str, file_type: str = "pdf"):
         db.close()
 
 
-def _render_pdf(output_path: Path, report: models.Report, sections: list[models.Section]) -> None:
+def _render_pdf(
+    output_path: Path,
+    report: models.Report,
+    sections: list[models.Section],
+    competitor_count: int = 0,
+) -> None:
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(str(output_path), pagesize=letter)
 
@@ -113,6 +125,12 @@ def _render_pdf(output_path: Path, report: models.Report, sections: list[models.
                             styles["Italic"],
                         )
                     )
+            story.append(Spacer(1, 8))
+
+        if section.title == COMPETITOR_SECTION_TITLE and competitor_count > 0:
+            story.append(
+                Paragraph(escape(COMPETITOR_COVERAGE_NOTE), styles["Italic"])
+            )
             story.append(Spacer(1, 8))
 
         story.append(Spacer(1, 14))
