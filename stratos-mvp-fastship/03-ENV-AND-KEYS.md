@@ -40,8 +40,8 @@ via the literal `dev` token). This bypass is force-disabled in production.
 | `DATABASE_URL` | Yes | Postgres connection string. **Local:** the docker-compose default `postgresql://stratos:stratos@localhost:5432/stratos`. **Prod:** create a free Postgres at [neon.tech](https://neon.tech) → copy its connection string. |
 | `REDIS_BROKER_URL` | Yes | Celery broker. **Local:** `redis://localhost:6379/0` (docker-compose). **Prod:** Railway Redis plugin URL, append `/0`. |
 | `REDIS_PUBSUB_URL` | Yes | SSE pub/sub (a *different* Redis DB number). **Local:** `redis://localhost:6379/1`. **Prod:** same Railway Redis URL, append `/1`. |
-| `LLM_PROVIDER` | Yes | Set to `groq`. |
-| `GROQ_API_KEY` | Yes | LLM inference. Get it free at [console.groq.com/keys](https://console.groq.com/keys). Powers clarification, outline, research queries, and section writing. |
+| `GROQ_API_KEY_1` | Yes | LLM inference. Get it free at [console.groq.com/keys](https://console.groq.com/keys). Powers clarification, outline, research queries, and section writing. |
+| `GROQ_API_KEY_2` | Yes | A second Groq key on a *separate* account. `app/llm/client.py` uses the two as a fallback pool — one primary, the other on rate-limit/API failure — roughly doubling the effective daily token quota. (The code still reads these as `GROQ_API_KEY_ALISHA` / `GROQ_API_KEY_ENCRIL`; rename pending.) |
 | `SERP_API_KEY` | Yes | Web search for the research worker. Sign up at [serpapi.com](https://serpapi.com) → API key (free tier ~100 searches/mo). |
 | `ASTRA_DB_API_ENDPOINT` | Yes | Vector evidence store. Create a free DB at [astra.datastax.com](https://astra.datastax.com) → "API Endpoint" on the DB dashboard. |
 | `ASTRA_DB_APPLICATION_TOKEN` | Yes | Same Astra DB → "Generate Token" (role: DB Admin). Starts with `AstraCS:`. |

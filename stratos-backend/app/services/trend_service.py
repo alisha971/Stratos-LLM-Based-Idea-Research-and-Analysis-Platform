@@ -80,6 +80,7 @@ class TrendService:
             raw = generate_chat(
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.3,
+                task="trend_query",
             )
 
             data = json.loads(raw)

@@ -64,6 +64,7 @@ def run_outline(self, report_id: str):
         raw_output = generate_chat(
             messages=[{"role": "system", "content": prompt}],
             temperature=0.2,
+            task="outline",
         )
 
         section_titles = parse_outline(raw_output)
