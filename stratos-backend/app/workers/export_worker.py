@@ -63,6 +63,16 @@ def run_export(self, report_id: str, file_type: str = "pdf"):
         )
         db.add(export_record)
         report.status = SessionState.EXPORTED.value
+
+        # Previously only report.status reached EXPORTED -- the session sat
+        # at READY_FOR_EXPORT forever, indistinguishable from "still
+        # exporting" to anything reading session state.
+        session = (
+            db.query(models.Session).filter_by(id=report.session_id).first()
+        )
+        if session:
+            session.status = SessionState.EXPORTED.value
+
         db.commit()
         db.refresh(export_record)
 
