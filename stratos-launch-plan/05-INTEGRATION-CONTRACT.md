@@ -102,11 +102,13 @@ Response 200:
 }
 ```
 
-### 3.7 `GET /exports/{report_id}/file`
+### 3.7 `GET /exports/{report_id}/file?token=<jwt>`
 
+- Reached via plain browser navigation (`window.open`/`<a>`), which can't set an `Authorization` header, so the JWT is also accepted as `?token=` — same pattern as the SSE stream (§4). `Authorization: Bearer` is still accepted and takes precedence if both are present.
 - Dev (`EXPORT_STORAGE=local`): `200` with `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="stratos-report.pdf"`.
 - Prod (`EXPORT_STORAGE=r2`): `302` redirect to a presigned R2 URL (1-hour expiry).
-- `404` if no export record yet.
+- `404` if no export record yet, or if the report isn't owned by the caller.
+- `401` if neither a valid header nor `?token=` is present.
 
 ### 3.8 Billing (see doc 08 for provider details)
 
