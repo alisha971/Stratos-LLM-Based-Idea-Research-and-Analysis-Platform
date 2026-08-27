@@ -29,13 +29,14 @@ pip install -r requirements.txt
 Create a `.env` file in `stratos-backend` and set at least:
 
 - `DATABASE_URL`
-- `LLM_PROVIDER`
-- `GROQ_API_KEY`
+- `GROQ_API_KEY_1`
+- `GROQ_API_KEY_2`
 - `SERP_API_KEY`
 - `ASTRA_DB_API_ENDPOINT`
 - `ASTRA_DB_APPLICATION_TOKEN`
 - `GOOGLE_CLIENT_ID`
 - `JWT_SECRET`
+- `PRODUCT_HUNT_TOKEN` (optional — see below)
 
 Example database URL format:
 
@@ -53,15 +54,21 @@ Use this mapping when setting up on a fresh machine:
     - Create a DB named `stratos`
     - Use your local postgres username/password
     - Format: `postgresql://<user>:<password>@localhost:5432/stratos`
-- `LLM_PROVIDER`
-  - Source: choose the model provider your code should use
-  - Current supported value in this repo: `groq`
-- `GROQ_API_KEY`
-  - Source: Groq Console API keys
+- `GROQ_API_KEY_1` / `GROQ_API_KEY_2`
+  - Source: Groq Console API keys — two separate keys/accounts
+  - What it's for: `app/llm/client.py` routes each LLM call to one key as
+    primary and falls back to the other on failure (rate limit, API error),
+    roughly doubling the effective daily token quota. Both keys use the same
+    model (`openai/gpt-oss-20b`).
   - How to set:
-    - Sign in to [https://console.groq.com](https://console.groq.com)
-    - Create an API key
-    - Paste it as `GROQ_API_KEY=...`
+    - Sign in to [https://console.groq.com](https://console.groq.com) with
+      each account
+    - Create an API key in each
+    - Paste them as `GROQ_API_KEY_1=...` and `GROQ_API_KEY_2=...`
+  - Note: the code currently still reads these as `GROQ_API_KEY_ALISHA` /
+    `GROQ_API_KEY_ENCRIL` (`app/config.py`, `app/llm/client_groq.py`); a rename
+    to `_1`/`_2` is pending. Until then, use the `_ALISHA`/`_ENCRIL` names in
+    your local `.env`.
 - `SERP_API_KEY`
   - Source: SerpAPI account dashboard
   - How to set:
@@ -102,8 +109,8 @@ Create `stratos-backend/.env` like this and replace values:
 ```env
 DATABASE_URL=postgresql://postgres:<password>@localhost:5432/stratos
 
-LLM_PROVIDER=groq
-GROQ_API_KEY=<your_groq_api_key>
+GROQ_API_KEY_1=<your_groq_api_key_1>
+GROQ_API_KEY_2=<your_groq_api_key_2>
 SERP_API_KEY=<your_serpapi_key>
 
 ASTRA_DB_API_ENDPOINT=<your_astra_api_endpoint>

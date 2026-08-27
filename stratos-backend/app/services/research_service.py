@@ -65,6 +65,7 @@ class ResearchService:
             raw = generate_chat(
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.3,
+                task="research_query",
             )
 
             data = json.loads(raw)

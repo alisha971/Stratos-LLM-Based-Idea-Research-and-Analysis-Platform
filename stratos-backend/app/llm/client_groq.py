@@ -2,14 +2,20 @@ import os
 from groq import Groq
 from typing import List, Dict
 
-_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_clients = {
+    "alisha": Groq(api_key=os.getenv("GROQ_API_KEY_ALISHA")),
+    "encril": Groq(api_key=os.getenv("GROQ_API_KEY_ENCRIL")),
+}
 
-MODEL = "openai/gpt-oss-20b"
 
-
-def generate_chat(messages: List[Dict[str, str]], temperature: float = 0.2) -> str:
+def generate_chat(
+    messages: List[Dict[str, str]],
+    key_label: str,
+    model: str,
+    temperature: float = 0.2,
+) -> str:
     """
-    Multi-turn chat completion.
+    Multi-turn chat completion against a specific named Groq credential.
 
     messages format:
     [
@@ -20,8 +26,8 @@ def generate_chat(messages: List[Dict[str, str]], temperature: float = 0.2) -> s
     ]
     """
 
-    response = _client.chat.completions.create(
-        model=MODEL,
+    response = _clients[key_label].chat.completions.create(
+        model=model,
         messages=messages,
         temperature=temperature,
         max_tokens=768,

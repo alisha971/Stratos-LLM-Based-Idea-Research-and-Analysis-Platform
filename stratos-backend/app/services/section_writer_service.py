@@ -116,6 +116,7 @@ class SectionWriterService:
         raw_output = generate_chat(
             messages=[{"role": "system", "content": prompt}],
             temperature=0.2,
+            task="section_writer",
         )
         return self._parse_json(raw_output)
 

@@ -32,8 +32,10 @@ class Settings:
     DEV_AUTH_BYPASS = _as_bool(os.getenv("DEV_AUTH_BYPASS", "false"))
 
     # --- LLM ---
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER")
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    # Two Groq API keys/accounts, used as a fallback pool (see app/llm/client.py)
+    # to roughly double the effective daily token quota.
+    GROQ_API_KEY_ALISHA = os.getenv("GROQ_API_KEY_ALISHA")
+    GROQ_API_KEY_ENCRIL = os.getenv("GROQ_API_KEY_ENCRIL")
 
     # --- Research ---
     SERP_API_KEY = os.getenv("SERP_API_KEY")
