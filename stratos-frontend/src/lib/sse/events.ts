@@ -20,16 +20,21 @@ export type BackendEventType =
   | "competitor_ready"
   | "competitor_failed"
   | "section_writing_started"
+  | "section_writing_failed"
   | "section_started"
   | "section_chunk"
   | "section_done"
   | "section_failed"
   | "sections_done"
+  | "verdict_started"
+  | "verdict_ready"
+  | "verdict_failed"
   | "report_assembled"
   | "assembler_failed"
   | "embedding_skipped"
   | "export_done"
   | "export_failed"
+  | "pipeline_failed"
   | "unknown";
 
 export type StreamEnvelope = {

@@ -4,26 +4,87 @@ import Link from "next/link";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 
 export const metadata: Metadata = {
-  title: "Stratos — Market research, written like a memo",
+  title: "Stratos — Should you build it, or let it go?",
   description:
-    "Stratos turns a one-line startup idea into a cited market research report in about ten minutes. Free while in beta.",
+    "You have an idea you can't stop thinking about, and no straight answer about whether it's worth your next six months. Stratos asks a few sharp questions, reads the live web for and against it, and hands you a cited verdict — build it, reshape it, or walk away. Free while in beta.",
 };
+
+const audiences = [
+  {
+    who: "Indie hackers",
+    pain: "“I have six ideas and one free weekend. I don't know which one deserves it.”",
+    got: "A case for each: where demand is real, who already owns the space, and the one shift that would make yours worth shipping.",
+  },
+  {
+    who: "Students & researchers",
+    pain: "“My advisor asked if this has been done before. I've been tab-hopping for two days.”",
+    got: "A cited landscape of what exists, what contradicts your premise, and an honest list of what nobody has answered yet — your gap, in writing.",
+  },
+  {
+    who: "Product managers",
+    pain: "“I have to defend this bet on Thursday and all I have is a gut feeling.”",
+    got: "A brief that argues both sides, so you walk in with the counter-argument already answered instead of hearing it first from your VP.",
+  },
+  {
+    who: "Founders & career-switchers",
+    pain: "“Everyone I ask says it sounds great. Nobody tells me what would kill it.”",
+    got: "The strongest case against your idea, sourced — and a plain verdict on whether the case for it still wins.",
+  },
+];
+
+const examples = [
+  {
+    idea: "“A meal-prep app for medical residents.”",
+    verdict:
+      "Pivot — the audience is real but too small to price for. Same product, adjacent audience, and the numbers work.",
+  },
+  {
+    idea: "“An AI note-taker for therapists.”",
+    verdict:
+      "Don't build it as scoped — compliance load and incumbent distribution point the same way, and here is the evidence behind each.",
+  },
+  {
+    idea: "“A thesis on gig-worker credit scoring in India.”",
+    verdict:
+      "Go — three papers circle the question and none answer it. That unanswered piece is your contribution.",
+  },
+];
+
+const contrast = [
+  {
+    label: "Asking a chatbot",
+    line: "It agrees with you. Ask the same idea twice, phrased two ways, and you get two confident answers — neither one shows its evidence.",
+  },
+  {
+    label: "Scoring tools",
+    line: "A number out of 100 from one paragraph of input. You can't argue with a score, and you can't take it to anyone.",
+  },
+  {
+    label: "A weekend of your own research",
+    line: "You find what you were hoping to find. Nobody spends Saturday hunting for the reason their own idea fails.",
+  },
+];
 
 const steps = [
   {
     n: "01",
-    title: "Say what you're building",
-    body: "One sentence is plenty. Stratos asks two or three pointed questions to pin down the market you actually mean.",
+    title: "Tell it what you're building",
+    body: "One sentence is plenty. It asks you two or three pointed questions back — so it judges your actual idea, not a guess at it.",
   },
   {
     n: "02",
-    title: "It goes and reads",
-    body: "Live web search, trend data, competitor scans. You watch the work happen — every claim keeps its source.",
+    title: "It looks for the reasons you're wrong",
+    body: "Live search, trend data, competitor scans — deliberately hunting for evidence against you, not just for you. You watch it happen, and every claim keeps its source.",
   },
   {
     n: "03",
-    title: "You get a memo",
-    body: "A structured report with inline citations, readable in the browser or exported as a PDF you'd hand to an investor.",
+    title: "You get a verdict you can argue with",
+    body: "Build, reshape, or walk away — written out like a judge's opinion: which evidence won, why, and the exact thing that would flip the answer.",
+  },
+  {
+    n: "04",
+    title: "It tells you what it couldn't find out",
+    body: "No confident filler. Whatever the research couldn't settle is listed plainly, so you know which calls are still yours — in a report you can export and send on.",
   },
 ];
 
@@ -137,23 +198,25 @@ export default function LandingPage() {
         <section className="grid items-center gap-10 py-16 sm:py-20 md:grid-cols-[1fr_auto]">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-faint">
-              Market research, without the two weeks
+              For the idea you keep coming back to
             </p>
             <h1 className="mt-6 max-w-2xl font-serif text-5xl font-medium leading-[1.08] tracking-tight sm:text-6xl">
-              A research analyst that shows its{" "}
-              <em className="text-moss">sources</em>.
+              Build it, reshape it, or{" "}
+              <em className="text-moss">let it go</em>?
             </h1>
             <p className="mt-8 max-w-xl text-lg leading-relaxed text-ink-soft">
-              Describe your startup idea in a sentence. Stratos clarifies what
-              you mean, reads the live web, and writes a cited market report —
-              market size, competitors, trends — in about ten minutes.
+              You already have the idea. What you don&rsquo;t have is a straight
+              answer about whether it deserves your next six months. Give
+              Stratos one sentence. It asks what you actually mean, reads the
+              live web for you and against you, and hands back a cited verdict
+              you can defend — about ten minutes, while you watch it work.
             </p>
             <div className="mt-10 flex flex-wrap items-center gap-5">
               <Link
                 href="/login"
                 className="bg-moss px-6 py-3 text-sm font-medium text-paper shadow-lift hover:bg-moss-deep"
               >
-                Write my first report
+                Settle my idea
               </Link>
               <span className="text-sm text-ink-faint">
                 Free while in beta. No card.
@@ -162,6 +225,77 @@ export default function LandingPage() {
           </div>
           <div className="hidden justify-center md:flex">
             <StrataIllustration />
+          </div>
+        </section>
+
+        {/* Who it's for — the pain, in their words */}
+        <section className="border-t border-rule-strong py-14">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-faint">
+            You&rsquo;ve probably said one of these out loud
+          </p>
+          <div className="mt-8 grid gap-x-10 gap-y-8 sm:grid-cols-2">
+            {audiences.map((a) => (
+              <div key={a.who} className="border-t border-rule pt-5">
+                <h2 className="font-mono text-xs uppercase tracking-[0.16em] text-moss">
+                  {a.who}
+                </h2>
+                <p className="mt-3 font-serif text-lg italic leading-snug text-ink">
+                  {a.pain}
+                </p>
+                <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                  {a.got}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Why not the usual route */}
+        <section className="border-t border-rule-strong py-14">
+          <h2 className="max-w-2xl font-serif text-3xl font-medium leading-tight">
+            You&rsquo;re not stuck for lack of effort. You&rsquo;re stuck
+            because nothing you&rsquo;ve tried was willing to disagree with you.
+          </h2>
+          <div className="mt-10 grid gap-8 sm:grid-cols-3">
+            {contrast.map((c) => (
+              <div key={c.label} className="border-t border-rule pt-4">
+                <h3 className="font-mono text-xs uppercase tracking-[0.16em] text-ink-faint">
+                  {c.label}
+                </h3>
+                <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                  {c.line}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-10 max-w-2xl text-base leading-relaxed text-ink-soft">
+            Stratos runs a pass whose only job is to build the case against your
+            idea, tags every source with the side it argues for, and then weighs
+            the two out in the open. That&rsquo;s why the answer is something
+            you can push back on at a specific step — instead of a verdict you
+            either swallow whole or ignore.
+          </p>
+        </section>
+
+        {/* Examples */}
+        <section className="border-t border-rule-strong py-14">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-faint">
+            What people bring it — and what they walk out with
+          </p>
+          <div className="mt-8 divide-y divide-rule border-y border-rule">
+            {examples.map((e) => (
+              <div
+                key={e.idea}
+                className="grid gap-2 py-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:gap-10"
+              >
+                <p className="font-serif text-lg italic leading-snug text-ink">
+                  {e.idea}
+                </p>
+                <p className="text-sm leading-relaxed text-ink-soft">
+                  {e.verdict}
+                </p>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -184,7 +318,7 @@ export default function LandingPage() {
         {/* Specimen — a stacked sheet of the actual output */}
         <section className="py-16">
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-faint">
-            From an actual report
+            From an actual verdict
           </p>
           <div className="relative mt-8 max-w-2xl">
             {/* Sheets underneath — gives the document physical depth */}
@@ -198,15 +332,37 @@ export default function LandingPage() {
             />
             <figure className="relative border border-rule-strong bg-paper-raised p-8 shadow-lift">
               <blockquote className="font-serif text-xl italic leading-relaxed text-ink">
-                &ldquo;The Indian D2C skincare market reached an estimated $1.2B
-                in 2025, growing at roughly 25% annually, driven primarily by
-                tier-2 city adoption [3][7]. Incumbents remain weakest in the
-                men&rsquo;s segment.&rdquo;
+                &ldquo;Go — with one condition. Demand is real: the Indian D2C
+                skincare market reached an estimated $1.2B in 2025, growing at
+                roughly 25% annually [3][7]. Against you: three funded
+                incumbents already own tier-1 distribution [2][5]. This verdict
+                flips unless you start in the men&rsquo;s segment, where
+                incumbents are weakest [6].&rdquo;
               </blockquote>
               <figcaption className="mt-4 text-sm text-ink-faint">
-                Every bracket is a live link to the source it came from.
+                Every bracket links to the source it came from. Every verdict
+                names what would change it.
               </figcaption>
             </figure>
+          </div>
+        </section>
+
+        {/* Closing call */}
+        <section className="border-t border-rule-strong py-14">
+          <h2 className="max-w-xl font-serif text-3xl font-medium leading-tight">
+            Stop rehearsing the idea in your head. Put it in writing and find
+            out.
+          </h2>
+          <div className="mt-8 flex flex-wrap items-center gap-5">
+            <Link
+              href="/login"
+              className="bg-moss px-6 py-3 text-sm font-medium text-paper shadow-lift hover:bg-moss-deep"
+            >
+              Settle my idea
+            </Link>
+            <span className="text-sm text-ink-faint">
+              One sentence to start. Ten minutes to a verdict.
+            </span>
           </div>
         </section>
 

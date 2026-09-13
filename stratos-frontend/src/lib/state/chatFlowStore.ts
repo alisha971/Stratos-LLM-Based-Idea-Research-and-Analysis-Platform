@@ -1,4 +1,4 @@
-import type { ReportView } from "@/lib/api/orchestratorClient";
+import type { ReportView, Verdict } from "@/lib/api/orchestratorClient";
 import type { AppStage, StreamEnvelope } from "@/lib/sse/events";
 
 export type Role = "user" | "assistant" | "system";
@@ -33,6 +33,11 @@ export type ChatFlowState = {
   progressEvents: ProgressEvent[];
   sectionsById: Record<string, SectionItem>;
   sectionOrder: string[];
+  // null = not ready yet. Once state.stage reaches "streamingSections" the
+  // UI reserves the verdict's slot and shows a pending state until this
+  // arrives (verdict_ready) -- see ReportSplitPanel.
+  verdict: Verdict | null;
+  unresolvedGaps: string[];
   finalReport: ReportView | null;
   error: string | null;
   connectionStatus: "idle" | "connected" | "disconnected";
@@ -51,6 +56,7 @@ export type ChatFlowAction =
   | { type: "UPSERT_SECTION"; section: SectionItem }
   | { type: "APPEND_SECTION_CHUNK"; sectionId: string; title?: string; text: string }
   | { type: "SET_SECTION_STATUS"; sectionId: string; status: SectionItem["status"] }
+  | { type: "SET_VERDICT"; verdict: Verdict; unresolvedGaps: string[] }
   | { type: "SET_FINAL_REPORT"; report: ReportView }
   | { type: "SET_ERROR"; error: string | null }
   | { type: "RESET" };
@@ -64,6 +70,8 @@ export const initialState: ChatFlowState = {
   progressEvents: [],
   sectionsById: {},
   sectionOrder: [],
+  verdict: null,
+  unresolvedGaps: [],
   finalReport: null,
   error: null,
   connectionStatus: "idle",
@@ -144,8 +152,20 @@ export function chatFlowReducer(
         },
       };
     }
+    case "SET_VERDICT":
+      return { ...state, verdict: action.verdict, unresolvedGaps: action.unresolvedGaps };
     case "SET_FINAL_REPORT":
-      return { ...state, finalReport: action.report };
+      // Backfills verdict/unresolvedGaps from the fetched report too --
+      // not just from the live verdict_ready SSE event. A session resumed
+      // after the verdict already landed (page reload, reconnect) never
+      // sees that event fire again; fetchReport's response is the only
+      // way it would otherwise learn the verdict exists.
+      return {
+        ...state,
+        finalReport: action.report,
+        verdict: action.report.verdict ?? state.verdict,
+        unresolvedGaps: action.report.unresolved_gaps ?? state.unresolvedGaps,
+      };
     case "SET_ERROR":
       return { ...state, error: action.error };
     case "RESET":
@@ -177,13 +197,23 @@ function buildProgressLabel(eventType: string): string {
     competitor_failed: "Competitor scan failed (continuing without competitors)",
     section_writing_started: "Writing sections",
     sections_done: "All sections written",
+    verdict_started: "Weighing the evidence",
+    verdict_ready: "Verdict reached",
     report_assembled: "Assembling report",
     export_done: "Export finished",
   };
   return labels[eventType] ?? `Event: ${eventType}`;
 }
 
-const RESEARCH_PROGRESS_EVENTS = new Set([
+// Events strictly BEFORE section writing starts -- these are the only ones
+// that should push stage back to "researching". Previously
+// RESEARCH_PROGRESS_EVENTS did this for every member including
+// sections_done/report_assembled, which fire well after
+// section_writing_started already moved the stage to "streamingSections" --
+// regressing it back to "researching" on screen for events that are
+// actually later in the pipeline. Fixed here while adding verdict_started/
+// verdict_ready, which would otherwise have extended the same bug.
+const PRE_WRITING_PROGRESS_EVENTS = new Set([
   "research_started",
   "searching_sources",
   "research_done",
@@ -196,8 +226,16 @@ const RESEARCH_PROGRESS_EVENTS = new Set([
   "scanning_competitors",
   "competitor_ready",
   "competitor_failed",
+]);
+
+// Everything that produces a timeline log entry -- a superset of
+// PRE_WRITING_PROGRESS_EVENTS, including milestones after writing starts.
+const RESEARCH_PROGRESS_EVENTS = new Set([
+  ...PRE_WRITING_PROGRESS_EVENTS,
   "section_writing_started",
   "sections_done",
+  "verdict_started",
+  "verdict_ready",
   "report_assembled",
 ]);
 
@@ -266,17 +304,25 @@ export function eventToActions(event: StreamEnvelope): ChatFlowAction[] {
   }
 
   if (RESEARCH_PROGRESS_EVENTS.has(event.type)) {
-    actions.push({ type: "SET_STAGE", stage: "researching" });
+    if (PRE_WRITING_PROGRESS_EVENTS.has(event.type)) {
+      actions.push({ type: "SET_STAGE", stage: "researching" });
+    }
     actions.push({
       type: "ADD_PROGRESS",
       event: {
         id: `${event.type}-${now}`,
         label: buildProgressLabel(event.type),
-        status: event.type.endsWith("_done")
-          ? "done"
-          : event.type.includes("failed")
-            ? "error"
-            : "running",
+        // "_ready" events (trend_ready, competitor_ready, outline_ready,
+        // verdict_ready) previously fell through to "running" forever --
+        // their label said "completed"/"reached" next to a status still
+        // reading "working". Fixed alongside adding verdict_ready, which
+        // would otherwise have been a new instance of the same bug.
+        status:
+          event.type.endsWith("_done") || event.type.endsWith("_ready")
+            ? "done"
+            : event.type.includes("failed")
+              ? "error"
+              : "running",
         timestamp: now,
       },
     });
@@ -315,6 +361,33 @@ export function eventToActions(event: StreamEnvelope): ChatFlowAction[] {
     }
   }
 
+  // verdict_ready carries the full prose (see verdict_worker.py) so the
+  // card can render immediately -- it does not wait for export_done, the
+  // way the rest of the finished report currently does.
+  if (event.type === "verdict_ready") {
+    const verdictValue = stringValue(payload.verdict);
+    if (verdictValue === "build" || verdictValue === "reshape" || verdictValue === "walk_away") {
+      actions.push({
+        type: "SET_VERDICT",
+        verdict: {
+          verdict: verdictValue,
+          holding: stringValue(payload.holding) || null,
+          flip_condition: stringValue(payload.flip_condition) || null,
+          confidence:
+            (payload.confidence as "high" | "medium" | "low" | undefined) ?? null,
+          payload: {
+            case_for_prose: stringValue(payload.case_for_prose) || undefined,
+            case_against_prose: stringValue(payload.case_against_prose) || undefined,
+            which_won: stringValue(payload.which_won) || undefined,
+          },
+        },
+        unresolvedGaps: Array.isArray(payload.unresolved_gaps)
+          ? payload.unresolved_gaps.filter((gap): gap is string => typeof gap === "string")
+          : [],
+      });
+    }
+  }
+
   // export_done flips to reportReady; the real report is fetched by the view
   // layer (it needs an async call, which a pure reducer cannot do).
   if (event.type === "export_done") {
@@ -327,8 +400,15 @@ export function eventToActions(event: StreamEnvelope): ChatFlowAction[] {
 
   if (event.type.includes("failed")) {
     // trend_failed and competitor_failed are non-fatal: the pipeline
-    // continues without trend items / competitors.
-    const NON_FATAL_FAILURES = new Set(["trend_failed", "competitor_failed"]);
+    // continues without trend items / competitors. verdict_failed is
+    // non-fatal too (backend Stage 4d) -- sections are already fully
+    // written by the time the verdict runs, so a missing verdict must not
+    // be shown as a broken report.
+    const NON_FATAL_FAILURES = new Set([
+      "trend_failed",
+      "competitor_failed",
+      "verdict_failed",
+    ]);
     const errorMessage = stringValue(payload.error) || `${event.type}`;
     if (!NON_FATAL_FAILURES.has(event.type)) {
       actions.push({ type: "SET_ERROR", error: errorMessage });

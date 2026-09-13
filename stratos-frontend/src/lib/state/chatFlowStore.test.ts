@@ -85,4 +85,101 @@ describe("eventToActions", () => {
     expect(finalState.stage).toBe("reportReady");
     expect(finalState.reportId).toBe("rep-9");
   });
+
+  it("stores the full verdict and unresolved gaps on verdict_ready", () => {
+    const actions = eventToActions({
+      type: "verdict_ready",
+      payload: {
+        report_id: "rep-1",
+        verdict: "reshape",
+        holding: "Go, but only in the underserved segment.",
+        case_for_prose: "Demand is real [CIT-001].",
+        case_against_prose: "Incumbents already own distribution [CIT-002].",
+        which_won: "The distribution gap outweighs the demand [CIT-002].",
+        flip_condition: "If a top incumbent adds this feature within a year.",
+        confidence: "medium",
+        unresolved_gaps: ["What the typical price point should be."],
+      },
+    });
+
+    const finalState = actions.reduce(chatFlowReducer, initialState);
+    expect(finalState.verdict?.verdict).toBe("reshape");
+    expect(finalState.verdict?.holding).toBe("Go, but only in the underserved segment.");
+    expect(finalState.verdict?.payload.case_against_prose).toContain("Incumbents");
+    expect(finalState.unresolvedGaps).toEqual(["What the typical price point should be."]);
+  });
+
+  it("ignores verdict_ready with an unrecognized verdict value", () => {
+    const actions = eventToActions({
+      type: "verdict_ready",
+      payload: { verdict: "not_a_real_verdict" },
+    });
+    expect(actions.some((a) => a.type === "SET_VERDICT")).toBe(false);
+  });
+
+  it("treats verdict_failed as non-fatal (report still assembles)", () => {
+    const actions = eventToActions({
+      type: "verdict_failed",
+      payload: { report_id: "rep-1", error: "LLM validation exhausted" },
+    });
+
+    const finalState = actions.reduce(chatFlowReducer, initialState);
+    expect(finalState.stage).not.toBe("failed");
+    expect(finalState.error).toBeNull();
+  });
+
+  it("does not regress stage back to researching for post-writing progress events", () => {
+    // Regression check: sections_done/report_assembled fire well after
+    // section_writing_started already moved the stage to
+    // streamingSections. They must not push SET_STAGE researching.
+    for (const eventType of ["sections_done", "report_assembled", "verdict_started", "verdict_ready"]) {
+      const actions = eventToActions({ type: eventType, payload: { report_id: "rep-1" } });
+      const stageActions = actions.filter((a) => a.type === "SET_STAGE");
+      expect(stageActions).toEqual([]);
+    }
+  });
+
+  it("still sets stage to researching for pre-writing progress events", () => {
+    const actions = eventToActions({
+      type: "scanning_trends",
+      payload: { report_id: "rep-1" },
+    });
+    const finalState = actions.reduce(chatFlowReducer, initialState);
+    expect(finalState.stage).toBe("researching");
+  });
+
+  it("marks a _ready progress event as done, not stuck on running", () => {
+    const actions = eventToActions({
+      type: "trend_ready",
+      payload: { report_id: "rep-1" },
+    });
+    const progressAction = actions.find((a) => a.type === "ADD_PROGRESS");
+    expect(progressAction?.type).toBe("ADD_PROGRESS");
+    if (progressAction?.type === "ADD_PROGRESS") {
+      expect(progressAction.event.status).toBe("done");
+    }
+  });
+
+  it("backfills verdict and unresolvedGaps from SET_FINAL_REPORT", () => {
+    const finalState = chatFlowReducer(initialState, {
+      type: "SET_FINAL_REPORT",
+      report: {
+        report_id: "rep-1",
+        status: "EXPORTED",
+        title: "Final Report",
+        verdict: {
+          verdict: "build",
+          holding: "Go.",
+          flip_condition: null,
+          confidence: "high",
+          payload: {},
+        },
+        unresolved_gaps: ["Some open question."],
+        sections: [],
+      },
+    });
+
+    expect(finalState.verdict?.verdict).toBe("build");
+    expect(finalState.unresolvedGaps).toEqual(["Some open question."]);
+  });
 });

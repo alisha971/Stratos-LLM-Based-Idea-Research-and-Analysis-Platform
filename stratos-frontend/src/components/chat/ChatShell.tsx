@@ -86,6 +86,21 @@ export function ChatShell() {
     setReportOpen(true);
   }
 
+  // Also auto-open on the FIRST streamed section_chunk (Stage 5d) -- the
+  // live-drafting view already existed (section text streams into
+  // sectionsById as it's written), but stayed invisible because the panel
+  // only opened once the final report landed, well after the fact. This
+  // is most of that fix: the user now watches the report get written
+  // instead of only seeing it once it's already done.
+  const [hasAutoOpenedForStreaming, setHasAutoOpenedForStreaming] = useState(false);
+  const hasStreamingContent = Object.values(state.sectionsById).some(
+    (section) => section.partialText.length > 0,
+  );
+  if (hasStreamingContent && !hasAutoOpenedForStreaming) {
+    setHasAutoOpenedForStreaming(true);
+    setReportOpen(true);
+  }
+
   const onAction = useCallback((action: ChatFlowAction) => dispatch(action), []);
 
   useEventStream({ sessionId: state.sessionId, token, onAction });
@@ -359,6 +374,8 @@ export function ChatShell() {
             <ReportSplitPanel
               finalReport={state.finalReport}
               sections={sections}
+              verdict={state.verdict}
+              unresolvedGaps={state.unresolvedGaps}
               onDownloadPdf={handleDownloadPdf}
               downloadDisabled={!state.finalReport}
               onClose={() => setReportOpen(false)}

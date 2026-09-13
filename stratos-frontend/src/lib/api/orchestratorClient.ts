@@ -45,6 +45,24 @@ export type Citation = {
   url: string | null;
   domain: string | null;
   title: string | null;
+  stance: "supports" | "challenges" | "neutral" | null;
+};
+
+// Mirrors app/utils/verdict_view.py's shape exactly -- shared by the PDF
+// export and this web view on the backend, kept in sync here.
+export type VerdictPayload = {
+  case_for_prose?: string;
+  case_against_prose?: string;
+  which_won?: string;
+  [key: string]: unknown;
+};
+
+export type Verdict = {
+  verdict: "build" | "reshape" | "walk_away";
+  holding: string | null;
+  flip_condition: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  payload: VerdictPayload;
 };
 
 export type ReportChunk = {
@@ -65,6 +83,13 @@ export type ReportView = {
   report_id: string;
   status: string;
   title: string;
+  // null until run_verdict completes, or if verdict_failed happened
+  // (non-fatal on the backend) -- render the report without a verdict
+  // block in that case, not an error state.
+  verdict: Verdict | null;
+  // What the research stage searched for but could not establish --
+  // shown as "What we couldn't settle" alongside the verdict.
+  unresolved_gaps: string[];
   sections: ReportSection[];
 };
 

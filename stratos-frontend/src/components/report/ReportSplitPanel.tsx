@@ -1,24 +1,51 @@
 import ReactMarkdown from "react-markdown";
 
 import { PdfDownloadButton } from "@/components/report/PdfDownloadButton";
-import type { ReportView } from "@/lib/api/orchestratorClient";
+import { VerdictCard } from "@/components/report/VerdictCard";
+import type { ReportView, Verdict } from "@/lib/api/orchestratorClient";
+import { useTypewriter } from "@/lib/hooks/useTypewriter";
 import type { SectionItem } from "@/lib/state/chatFlowStore";
 
 type ReportSplitPanelProps = {
   finalReport: ReportView | null;
   sections: SectionItem[];
+  verdict: Verdict | null;
+  unresolvedGaps: string[];
   onDownloadPdf: () => void;
   downloadDisabled?: boolean;
   onClose?: () => void;
 };
 
+const STANCE_LABEL: Record<string, string> = {
+  supports: "supports",
+  challenges: "challenges",
+  neutral: "neutral",
+};
+
+function StreamingChunkText({ text }: { text: string }) {
+  const shown = useTypewriter(text);
+  return (
+    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft">
+      {shown || "Gathering material for this section…"}
+    </p>
+  );
+}
+
 export function ReportSplitPanel({
   finalReport,
   sections,
+  verdict,
+  unresolvedGaps,
   onDownloadPdf,
   downloadDisabled = false,
   onClose,
 }: ReportSplitPanelProps) {
+  // The verdict's slot is reserved as soon as anything is streaming --
+  // sections or the verdict itself -- not only once the final report has
+  // been fetched. Without this the block would appear late and push the
+  // body down mid-read (Stage 5c).
+  const showVerdictSlot = Boolean(finalReport) || sections.length > 0;
+
   return (
     <aside className="flex h-full min-h-[300px] w-full flex-col bg-paper-raised">
       <div className="flex items-center justify-between border-b border-rule-strong px-6 py-3">
@@ -50,6 +77,14 @@ export function ReportSplitPanel({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        {showVerdictSlot ? (
+          <VerdictCard
+            verdict={verdict}
+            unresolvedGaps={unresolvedGaps}
+            pending={!verdict}
+          />
+        ) : null}
+
         {finalReport ? (
           <>
             <h3 className="font-serif text-2xl font-medium leading-snug tracking-tight text-ink">
@@ -90,11 +125,22 @@ export function ReportSplitPanel({
                                   rel="noopener noreferrer"
                                   className="text-moss underline decoration-rule-strong underline-offset-2 hover:decoration-moss"
                                 >
-                                  {citation.domain || citation.url}
+                                  {citation.title || citation.domain || citation.url}
                                 </a>
                               ) : (
-                                <span>{citation.domain || "source"}</span>
+                                <span>{citation.title || citation.domain || "source"}</span>
                               )}
+                              {citation.stance && citation.stance !== "neutral" ? (
+                                <span
+                                  className={
+                                    citation.stance === "challenges"
+                                      ? "ml-1 text-rust"
+                                      : "ml-1 text-moss"
+                                  }
+                                >
+                                  ({STANCE_LABEL[citation.stance]})
+                                </span>
+                              ) : null}
                             </li>
                           ))}
                         </ul>
@@ -121,9 +167,7 @@ export function ReportSplitPanel({
                       {section.status === "done" ? "done" : "writing"}
                     </span>
                   </div>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft">
-                    {section.partialText || "Gathering material for this section…"}
-                  </p>
+                  <StreamingChunkText text={section.partialText} />
                 </article>
               ))}
             </div>
