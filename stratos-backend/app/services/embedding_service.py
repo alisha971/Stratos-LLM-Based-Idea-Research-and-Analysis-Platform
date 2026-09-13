@@ -99,10 +99,18 @@ class EmbeddingService:
         evidence_id: str | None = None,
         url: str | None = None,
         domain: str | None = None,
+        stance: str | None = None,
     ) -> int:
         """save_chunk for each item in `chunks`, indexed in order. Returns
         how many actually saved -- a partial failure (some chunks saved,
-        some not) is not itself an error, matching the fail-soft rule."""
+        some not) is not itself an error, matching the fail-soft rule.
+
+        `stance` here is only the Stage 3e provenance PRIOR, recorded on
+        the chunk documents for visibility -- the AUTHORITATIVE stance
+        used for ranking (Stage 3f) is looked up fresh from `Source.stance`
+        after batch LLM classification, since stance is a source-level
+        property that can be refined after these chunks are already
+        written. See EvidenceBundleService._hybrid_rank_for_section."""
         saved = 0
         for index, text in enumerate(chunks):
             chunk_id = self.save_chunk(
@@ -114,6 +122,7 @@ class EmbeddingService:
                 chunk_index=index,
                 url=url,
                 domain=domain,
+                stance=stance,
             )
             if chunk_id:
                 saved += 1

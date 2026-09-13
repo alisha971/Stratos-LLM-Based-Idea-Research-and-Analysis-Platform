@@ -189,6 +189,39 @@ class AstraEvidenceRepository:
             )
             return []
 
+    def list_evidence_chunks(self, report_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        """Plain (non-vector) lexical read of the `embeddings` collection,
+        filtered to web-scraped evidence chunks only. "web_chunk" must
+        match EmbeddingService.CONTENT_TYPE_WEB_CHUNK -- kept as a literal
+        here rather than importing that module, since embedding_service.py
+        already imports this one and this repository intentionally stays
+        the lower layer. trend_item/competitor_profile chunks live in the
+        same physical collection but are out of scope here; they have
+        their own read paths (fetch_trend_items/fetch_competitor_insights).
+
+        No vector sort -- this is the lexical corpus for EvidenceRanker,
+        not semantic search (see find_similar_embeddings for that). This
+        is the fix for the fusion join in
+        EvidenceBundleService._hybrid_rank_for_section, which used to match
+        lexical and semantic hits on a 180-char text-prefix fingerprint
+        because the two sides had no shared id -- sourcing both from this
+        one collection means they share a real per-chunk `_id`."""
+        if not self.enabled:
+            return []
+
+        try:
+            cursor = self._collection("embeddings").find(
+                {"report_id": report_id, "content_type": "web_chunk"},
+                limit=limit,
+            )
+            return [dict(item) for item in cursor]
+        except Exception:
+            logger.exception(
+                "[ASTRA] Failed to list evidence chunks for report_id=%s",
+                report_id,
+            )
+            return []
+
     def fetch_evidence(self, report_id: str, section_title: str) -> list[dict[str, Any]]:
         bundle = self.get_evidence_bundle(
             report_id=report_id,
@@ -197,6 +230,14 @@ class AstraEvidenceRepository:
         if bundle and isinstance(bundle.get("items"), list):
             return list(bundle["items"])
 
+        chunks = self.list_evidence_chunks(report_id)
+        if chunks:
+            return chunks
+
+        # Legacy fallback: reports ingested before evidence chunks moved to
+        # the `embeddings` collection still have `evidence.snippets[]` and
+        # no matching `embeddings` docs (or embeddings were disabled at
+        # ingestion time) -- flatten the old shape so they keep working.
         return self._flatten_evidence_documents(self.list_evidence(report_id))
 
     def fetch_trend_items(self, report_id: str, section_title: str) -> list[dict[str, Any]]:

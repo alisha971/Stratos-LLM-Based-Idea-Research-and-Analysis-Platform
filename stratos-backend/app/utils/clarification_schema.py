@@ -234,3 +234,32 @@ def writer_view(clarified_summary: Any) -> dict[str, Any]:
         view["hard_constraints"] = constraints
 
     return view
+
+
+def research_directives(clarified_summary: Any) -> list[str]:
+    """The flat list of research directives from ``clarified_summary``
+    (fields the user couldn't answer, converted to research questions --
+    see unknown_directive). Shared by EvidenceBundleService.
+    unresolved_directives (which reports of these research still didn't
+    settle) and ResearchService's query generation (Stage 3c: use these as
+    query SEEDS up front, not only as a report-time gap list)."""
+    data = clarified_summary
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(data, dict):
+        return []
+
+    directives = data.get("research_directives")
+    if isinstance(directives, str):
+        try:
+            directives = json.loads(directives)
+        except (ValueError, TypeError):
+            return []
+
+    if not isinstance(directives, list):
+        return []
+
+    return [item.strip() for item in directives if isinstance(item, str) and item.strip()]

@@ -14,22 +14,35 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Provenance prior (Stage 3e step 1): a source found by the counter pass
+# starts "challenges" (the pass exists specifically to find disconfirming
+# evidence); a main-pass or directive-seed source starts "neutral", since a
+# topic-descriptive query says nothing about which way its results lean.
+# Refined later by classify_stance() -- an actual LLM read of the source
+# relative to this idea, not just which query found it.
+STANCE_PRIOR_MAIN = "neutral"
+STANCE_PRIOR_COUNTER = "challenges"
+
+
 @celery_app.task(bind=True)
 def run_research(self, report_id: str):
     """
     Research Worker
-    - Fetches external evidence
-    - Stores raw evidence in Astra
-    - Stores metadata in Postgres
+    - Fetches external evidence (main pass: confirmatory; counter pass:
+      deliberately adversarial -- Stage 3a)
+    - Stores raw evidence in Astra, vectorized on the ingestion path
+      (Stage 2c)
+    - Stores metadata + a stance provenance prior in Postgres (Stage 3e),
+      refined by a batched LLM classification once ingestion completes
     """
-    
+
     db = SessionLocal()
 
     try:
         report = db.query(models.Report).filter_by(id=report_id).first()
         if not report:
             raise ValueError("Report not found")
-        
+
         session = db.query(models.Session).filter_by(id=report.session_id).first()
         if not session or not session.clarified_summary:
             raise ValueError("Clarified summary missing")
@@ -38,21 +51,72 @@ def run_research(self, report_id: str):
 
         service = ResearchService(db=db)
         embedding_service = EmbeddingService()
+        idea_description = session.idea_description or ""
 
-        queries = service.generate_queries(session.clarified_summary)
-        logger.info(f"[RESEARCH] Generated {len(queries)} queries")
-        
+        # --------------------------------------------------
+        # QUERY GENERATION: main + counter pass concurrently (Stage 3a).
+        # Independent LLM calls on different primary Groq keys
+        # (research_query / research_query_counter in routing.py), so
+        # running them concurrently roughly halves this stage's wall time
+        # instead of just spreading load across keys that fire serially.
+        # --------------------------------------------------
+        with ThreadPoolExecutor(max_workers=2) as query_executor:
+            main_future = query_executor.submit(
+                service.generate_queries,
+                session.clarified_summary,
+                idea_description=idea_description,
+                report_id=report_id,
+            )
+            counter_future = query_executor.submit(
+                service.generate_counter_queries,
+                session.clarified_summary,
+                idea_description=idea_description,
+                report_id=report_id,
+            )
+            main_queries = main_future.result()
+            counter_queries = counter_future.result()
+
+        # Stage 3c: research directives (fields the user couldn't answer)
+        # join the main pass -- they're about filling knowledge gaps, not
+        # deliberately adversarial framing, so a directive-seeded source
+        # gets the same "neutral" prior as a regular main-pass source.
+        directive_seeds = service.seed_queries_from_directives(session.clarified_summary)
+
+        # Tag every query with which pass produced it, so results inherit
+        # the right stance prior below. Dedup across the three sources
+        # (a directive seed could coincide with an LLM-generated query).
+        queries_with_pass: list[tuple[str, str]] = []
+        seen_queries: set[str] = set()
+        for query in [*main_queries, *directive_seeds]:
+            if query not in seen_queries:
+                queries_with_pass.append((query, STANCE_PRIOR_MAIN))
+                seen_queries.add(query)
+        for query in counter_queries:
+            if query not in seen_queries:
+                queries_with_pass.append((query, STANCE_PRIOR_COUNTER))
+                seen_queries.add(query)
+
+        logger.info(
+            "[RESEARCH] Generated %d queries (%d main, %d directive seeds, %d counter)",
+            len(queries_with_pass),
+            len(main_queries),
+            len(directive_seeds),
+            len(counter_queries),
+        )
+
         # --------------------------------------------------
         # PARALLEL QUERY EXECUTION
         # --------------------------------------------------
-        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as executor:
+        newly_created_source_ids: list[str] = []
+
+        with ThreadPoolExecutor(max_workers=min(4, len(queries_with_pass) or 1)) as executor:
             future_to_query = {
-                executor.submit(service.search, query): query
-                for query in queries
+                executor.submit(service.search, query): (query, stance_prior)
+                for query, stance_prior in queries_with_pass
             }
 
             for future in as_completed(future_to_query):
-                query = future_to_query[future]
+                query, stance_prior = future_to_query[future]
 
                 try:
                     results = future.result()
@@ -87,7 +151,8 @@ def run_research(self, report_id: str):
                     # NEWS → snippet only
                     # ---------------------------
                     if source_type == "news":
-                        source = service.create_source(report_id, result)
+                        source = service.create_source(report_id, result, stance=stance_prior)
+                        newly_created_source_ids.append(source.id)
 
                         snippet = result.get("snippet")
                         if snippet:
@@ -109,6 +174,7 @@ def run_research(self, report_id: str):
                                 evidence_id=evidence_id,
                                 url=url,
                                 domain=source.domain,
+                                stance=stance_prior,
                             )
 
                         continue
@@ -117,7 +183,8 @@ def run_research(self, report_id: str):
                     # PATENT → metadata only
                     # ---------------------------
                     if source_type == "patent":
-                        service.create_source(report_id, result)
+                        source = service.create_source(report_id, result, stance=stance_prior)
+                        newly_created_source_ids.append(source.id)
                         continue
 
                     # ---------------------------
@@ -134,7 +201,8 @@ def run_research(self, report_id: str):
                     if not snippets:
                         continue
 
-                    source = service.create_source(report_id, result)
+                    source = service.create_source(report_id, result, stance=stance_prior)
+                    newly_created_source_ids.append(source.id)
                     service.save_evidence(source.id, snippets)
 
                     evidence_id = service.save_to_astra(
@@ -158,7 +226,18 @@ def run_research(self, report_id: str):
                         evidence_id=evidence_id,
                         url=url,
                         domain=source.domain,
+                        stance=stance_prior,
                     )
+
+        # Stage 3e step 2: refine every provenance prior set above with an
+        # actual LLM read of each source against this specific idea.
+        # Fail-soft (see ResearchService.classify_stance) -- never blocks
+        # research_done on a classification hiccup.
+        service.classify_stance(
+            report_id=report_id,
+            clarified_summary=session.clarified_summary,
+            source_ids=newly_created_source_ids,
+        )
 
         publish_event("research_done", {"report_id": report_id})
 

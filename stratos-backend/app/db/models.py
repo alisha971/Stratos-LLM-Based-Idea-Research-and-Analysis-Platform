@@ -69,6 +69,19 @@ class Report(Base):
     # writing proceeded without them. NULL when all legs arrived normally.
     # See scripts/add_pipeline_tracking_columns.py.
     missing_research_legs = Column(Text)
+    # Gap-closing plan Stage 4 -- the verdict, synthesized after all
+    # sections are written (VerdictService). NULL until run_verdict
+    # completes; a verdict failure is non-fatal (see
+    # OrchestratorService.handle_stage_failed), so a report can be
+    # exported with these left NULL rather than losing an otherwise
+    # complete run. verdict_payload holds the full raw draft (all fields
+    # from VERDICT_PROMPT's schema) so nothing is lost even where a
+    # dedicated column doesn't exist for a field.
+    verdict = Column(String)              # "build" | "reshape" | "walk_away"
+    verdict_holding = Column(Text)
+    verdict_payload = Column(Text)        # full JSON draft
+    flip_condition = Column(Text)
+    verdict_confidence = Column(String)   # "high" | "medium" | "low"
     created_at = Column(DateTime, server_default=func.now())
 
     session = relationship("Session", back_populates="reports")
@@ -136,7 +149,23 @@ class Source(Base):
     report_id = Column(String, ForeignKey("reports.id"))
     url = Column(String)
     domain = Column(String)
+    # A real page/product title when one is available (SERP result title
+    # for research sources, product name for competitor sources) --
+    # citations previously showed the domain in this role everywhere,
+    # since nothing captured a real title even though the SERP response
+    # already carried one. NULL falls back to domain at read time (Stage
+    # 5b), not written as domain here, so a later backfill can tell
+    # "never had a title" apart from "title happened to equal domain".
+    title = Column(String)
     type = Column(String)
+    # "supports" | "challenges" | "neutral" -- relative to THIS report's
+    # idea, not absolute sentiment (see StanceService). Determined in two
+    # steps: a provenance prior from which research pass found it, then
+    # refined by LLM classification against the clarified summary. Default
+    # "neutral" on any classification failure -- never drops a source.
+    # See scripts/add_stance_columns.py.
+    stance = Column(String)
+    stance_rationale = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
     report = relationship("Report", back_populates="sources")

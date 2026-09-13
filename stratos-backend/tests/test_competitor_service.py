@@ -22,11 +22,19 @@ class FakeAstraRepository:
 
     def __init__(self, enabled=True):
         self.saved = []
+        self.saved_embedding_chunks = []
         self.enabled = enabled
 
     def save_competitor_insight(self, document):
         self.saved.append(document)
         return document.get("insight_id")
+
+    def save_embedding_chunk(self, document):
+        # CompetitorService.persist_astra now embeds each profile via
+        # EmbeddingService (gap-closing plan Stage 2c), which is
+        # constructed from this same fake repository by default.
+        self.saved_embedding_chunks.append(document)
+        return document.get("_id")
 
 
 class FakeDb:
@@ -324,7 +332,7 @@ class PersistenceShapeTests(unittest.TestCase):
 
         self.assertEqual(saved_count, 1)
         doc = self.astra.saved[0]
-        # Keys section_writer_service._normalize_evidence_items /
+        # Keys section_writer_service._finalize_evidence_items /
         # _flatten_evidence_documents-style consumers read.
         for key in ("source_id", "url", "domain", "title", "type", "text", "quote"):
             self.assertIn(key, doc)

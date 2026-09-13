@@ -560,6 +560,11 @@ class CompetitorService:
                 report_id=report_id,
                 url=resolved_url,
                 domain=domain,
+                # The product name is a better citation title than the
+                # domain (Stage 5b) -- "Notion" reads better than
+                # "notion.so", and it's already grounded (STRICT GROUNDING
+                # RULE above) so it's never invented, just reused here.
+                title=profile.get("name"),
                 type="competitor",
             )
             self.db.add(source)
@@ -652,11 +657,35 @@ class CompetitorService:
                 "domain": entry.get("domain"),
                 "text": text,
                 "quote": text,
+                # Raw grounding text `verify()` fetched and `profile()`
+                # extracted `text` from -- without this, competitor claims
+                # were the least auditable data in the system: `evidence`
+                # and `trend_items` both retain their source text, but this
+                # doc previously kept only the LLM's extracted summary with
+                # no way to check it against the actual page. Same
+                # truncation convention `profile()` already uses when
+                # building its prompt (COMPETITOR_PROFILE_PROMPT above).
+                "raw_homepage_text": (entry.get("homepage_text") or "")[:3000],
+                "raw_pricing_text": (entry.get("pricing_text") or "")[:2000],
                 "created_at": datetime.utcnow().isoformat(),
             }
 
             if self.astra_repository.save_competitor_insight(doc):
                 saved += 1
+
+            # Stage 2c: a competitor profile is already one coherent unit
+            # (Stage 2a's ingestion-path table) -- embed it whole, no
+            # chunking.
+            if text:
+                self.embedding_service.save_chunk(
+                    report_id=report_id,
+                    content_type=CONTENT_TYPE_COMPETITOR_PROFILE,
+                    text=text,
+                    source_id=entry["source_id"],
+                    evidence_id=doc["insight_id"],
+                    url=entry["resolved_url"],
+                    domain=entry.get("domain"),
+                )
 
         logger.info(
             "[COMPETITOR] Mirrored %d/%d insights to Astra for report_id=%s",

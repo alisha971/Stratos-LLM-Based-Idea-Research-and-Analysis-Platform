@@ -12,6 +12,12 @@ Usage:
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Runnable as `python scripts/create_astra_collections.py` from the backend
+# root -- that puts scripts/ on sys.path, not the repo root, so `app` would
+# not import otherwise (same reason tests/ prepend parents[1]).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from astrapy import DataAPIClient
 

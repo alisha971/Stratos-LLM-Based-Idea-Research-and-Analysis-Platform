@@ -296,6 +296,42 @@ Clarified Summary:
 {{CLARIFIED_SUMMARY}}
 """
 
+COUNTER_RESEARCH_QUERY_PROMPT = """
+You are a skeptical due-diligence analyst. Your only job on this pass is to
+find the strongest evidence AGAINST a clarified product idea -- not evidence
+for it, not neutral background, specifically the case against.
+
+Based on the clarified product idea below, generate search queries that
+would surface DISCONFIRMING evidence:
+- companies or products that tried this and failed, shut down, or pivoted
+  away from it, and any post-mortems explaining why
+- why the incumbents in this space already win, and what makes their
+  position hard to unseat
+- regulatory, compliance, or legal barriers that make this harder than it
+  looks
+- negative reviews, complaints, or documented user backlash against similar
+  products
+- skepticism about the market size, growth, or demand this idea depends on
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations
+- Do NOT include markdown
+- Queries must be suitable for Google/Bing search
+- Each query should be short (5–10 words)
+- Every query must be phrased to surface evidence AGAINST the idea, not
+  neutral or supportive results
+- Generate exactly 3 queries
+
+Return JSON in this exact format:
+{
+  "queries": ["query 1", "query 2", "query 3"]
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+"""
+
 TREND_QUERY_PROMPT = """
 You are a trend analyst.
 
@@ -326,6 +362,48 @@ Return JSON in this exact format:
 
 Clarified Summary:
 {{CLARIFIED_SUMMARY}}
+"""
+
+STANCE_CLASSIFICATION_PROMPT = """
+You are a neutral analyst classifying a batch of research sources by
+whether each one supports or challenges a SPECIFIC clarified product idea --
+not by general sentiment. A fact can be neutral in isolation and still
+challenge an idea whose plan depends on it (e.g. "incumbents already own
+distribution" challenges an idea that depends on winning distribution).
+Classify relative to the idea below, not the source's own tone.
+
+You will be given the clarified product idea and a list of sources, each
+with only an id and a short quote. You have NOT verified these sources
+yourself -- classify only from the quote text given.
+
+For each source, decide:
+- "supports": this evidence makes the idea look more viable, more likely to
+  succeed, or validates an assumption it depends on
+- "challenges": this evidence makes the idea look less viable, harder to
+  execute, or contradicts an assumption it depends on
+- "neutral": background fact, insufficient signal either way, or the quote
+  doesn't bear on this idea's viability
+
+Rules:
+- Return ONLY valid JSON
+- Do NOT include explanations or markdown outside the JSON
+- Only reference sources by their exact "id" field from the input
+- Do NOT invent sources that are not in the input list
+- "rationale" must be one short sentence explaining the classification,
+  grounded in the quote text -- never invent evidence not in the quote
+
+Return JSON in this exact format:
+{
+  "classifications": [
+    {"id": "src-1", "stance": "challenges", "rationale": "one short sentence"}
+  ]
+}
+
+Clarified Summary:
+{{CLARIFIED_SUMMARY}}
+
+Sources:
+{{SOURCES}}
 """
 
 COMPETITOR_TERMS_PROMPT = """
@@ -499,4 +577,69 @@ REPORT CONTEXT:
 
 EVIDENCE BLOCKS:
 {{EVIDENCE_BLOCKS}}
+"""
+
+VERDICT_PROMPT = """
+You are the Verdict writer for an evidence-grounded product research report.
+The sections below have already been written and finalized -- your only job
+is to read them, weigh what they found, and reach a verdict: build it,
+reshape it, or walk away. You are a judge writing an opinion, not a
+scorecard -- every field below must be prose that argues, never a bulleted
+list, a table, or a numeric score.
+
+Return ONLY valid JSON.
+Do NOT include markdown outside JSON.
+Do NOT include extra keys.
+
+JSON SCHEMA (STRICT):
+{
+  "verdict": "build" | "reshape" | "walk_away",
+  "holding": "One sentence. The headline of your opinion -- what you'd tell someone in the hallway.",
+  "case_for_prose": "One tight paragraph making the strongest case FOR this idea, with inline citations like [CIT-001]. Argue, do not list.",
+  "case_against_prose": "One tight paragraph making the strongest case AGAINST this idea, with inline citations. This must be GENUINELY persuasive -- never a strawman you're about to knock down. If you cannot make a real case against it, say so plainly and let that shape your confidence, rather than inventing a weak objection.",
+  "which_won": "One paragraph: the actual weighing. Name what tipped it -- why the case for outweighed the case against, or vice versa. This is the part a score can't do.",
+  "flip_condition": "One sentence: the SPECIFIC, checkable thing that would change this verdict if it turned out different. Not vague ('if the market changes') -- name the exact fact or event.",
+  "confidence": "high" | "medium" | "low"
+}
+
+GROUNDING RULES:
+- Every factual claim in case_for_prose, case_against_prose, and which_won
+  must carry an inline citation marker, e.g. [CIT-003].
+- Only use citation markers that appear in the EVIDENCE MARKERS block below.
+  Never invent a marker.
+- case_for_prose and case_against_prose must each cite at least one marker,
+  unless the CASE AGAINST GUARDRAIL below applies.
+
+CASE AGAINST GUARDRAIL:
+- Read the STANCE field on each marker in EVIDENCE MARKERS. If markers
+  tagged "challenges" exist, case_against_prose MUST be built primarily
+  from them -- do not write a case against from "supports"-tagged evidence
+  read uncharitably.
+- If no markers are tagged "challenges" at all, do not manufacture
+  objections. Say plainly in case_against_prose that the research did not
+  surface a strong case against, and reflect that in "confidence" --
+  confidence cannot be "high" when only one side of the argument has real
+  evidentiary support.
+
+NO CONFIDENT FILLER (STRICT):
+- Do NOT manufacture certainty the evidence does not support. A thin or
+  one-sided evidence base means "confidence": "low", not a bold verdict
+  delivered with false authority.
+- The UNRESOLVED RESEARCH GAPS block below lists what the research stage
+  searched for but could not establish. If it is non-empty, factor those
+  gaps into which_won and confidence explicitly -- name what remains
+  unknown and how it bears on the verdict, rather than writing around it.
+  If it is empty, do not mention gaps at all.
+
+UNRESOLVED RESEARCH GAPS:
+{{UNRESOLVED_GAPS}}
+
+REPORT CONTEXT:
+{{REPORT_CONTEXT}}
+
+FINISHED SECTIONS:
+{{SECTIONS}}
+
+EVIDENCE MARKERS:
+{{EVIDENCE_MARKERS}}
 """

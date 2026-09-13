@@ -194,6 +194,16 @@ class EvidenceRanker:
             "evidence_id": item.get("evidence_id")
             or item.get("astra_evidence_id")
             or item.get("_id"),
+            # Distinct from evidence_id above, which is the SOURCE-level id
+            # (shared by every chunk from one source) -- this is the
+            # per-CHUNK Astra document id, present only when `item` came
+            # from the `embeddings` collection (see
+            # AstraEvidenceRepository.list_evidence_chunks). Purely
+            # additive: lets EvidenceBundleService's RRF fusion join
+            # lexical and semantic hits on a real id instead of a
+            # text-prefix fingerprint, without changing what evidence_id
+            # means anywhere else.
+            "chunk_id": item.get("_id"),
             "source_id": item.get("source_id"),
             "url": item.get("url"),
             "domain": item.get("domain"),

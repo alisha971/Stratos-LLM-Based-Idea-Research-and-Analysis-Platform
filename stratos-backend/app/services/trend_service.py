@@ -26,6 +26,8 @@ from app.db import models
 from app.llm.client import generate_chat
 from app.llm.prompts import TREND_QUERY_PROMPT
 from app.services.astra_evidence_repository import AstraEvidenceRepository
+from app.services.embedding_service import CONTENT_TYPE_TREND_ITEM, EmbeddingService
+from app.utils.redis_pub import publish_event
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -56,14 +58,24 @@ class TrendService:
         self,
         db: Session,
         astra_repository: AstraEvidenceRepository | None = None,
+        embedding_service: EmbeddingService | None = None,
     ) -> None:
         self.db = db
         self.astra_repository = astra_repository or AstraEvidenceRepository()
+        self.embedding_service = embedding_service or EmbeddingService(
+            self.astra_repository
+        )
 
     # --------------------------------------------------
     # Query generation
     # --------------------------------------------------
-    def generate_queries(self, clarified_summary: str) -> list[str]:
+    def generate_queries(
+        self,
+        clarified_summary: str,
+        *,
+        idea_description: str = "",
+        report_id: str | None = None,
+    ) -> list[str]:
         """
         Generate trend-focused queries via LLM.
         Falls back to deterministic queries on any failure.
@@ -101,12 +113,28 @@ class TrendService:
             return cleaned[:4]
 
         except Exception:
-            logger.exception("[TREND] Query generation failed; using fallback")
+            # Same fix as ResearchService._generate_queries (gap-closing
+            # plan Stage 3b): this is a machinery failure, not a sign the
+            # idea can't be researched -- degrade to a fallback that's
+            # still about the right subject, and flag the degradation
+            # rather than silently googling three generic strings.
+            logger.warning(
+                "[TREND] Query generation failed; using templated fallback",
+                exc_info=True,
+            )
+            if report_id:
+                publish_event(
+                    "research_degraded",
+                    {"report_id": report_id, "stage": "trend_query_generation"},
+                )
+            idea = (idea_description or "").strip()
+            if not idea:
+                return ["industry trends", "market growth", "recent news"]
             return [
-                "industry trends",
-                "market growth",
-                "recent news",
-            ]
+                f"{idea} industry trends",
+                f"{idea} market growth",
+                f"{idea} recent news",
+            ][:4]
 
     # --------------------------------------------------
     # Provider fan-out wrapper
@@ -352,6 +380,15 @@ class TrendService:
         """
         Group items by category, upsert one Trend row per category,
         insert TrendItem rows, return {category: trend_id} map.
+
+        Mutates each item in `items` to carry its own `trend_item_id`
+        (generated once, here, if not already present) -- `persist_astra`
+        is expected to run next over the SAME list and reuse that id as
+        both the Postgres row's real id and the Astra document's id, so
+        the two sides can be joined. Without this, `evidence`/
+        `competitor_insights` link correctly via their real Postgres ids
+        but `trend_items` did not: each side minted its own independent
+        uuid for the same logical item.
         """
         trend_id_by_category: dict[str, str] = {}
 
@@ -376,9 +413,11 @@ class TrendService:
                 trend_id = trend.id
                 trend_id_by_category[category] = trend_id
 
+            trend_item_id = item.setdefault("trend_item_id", str(uuid.uuid4()))
+
             self.db.add(
                 models.TrendItem(
-                    id=str(uuid.uuid4()),
+                    id=trend_item_id,
                     trend_id=trend_id,
                     title=item.get("title"),
                     url=item.get("url"),
@@ -414,8 +453,15 @@ class TrendService:
             category = item.get("category") or CATEGORY_NEWS
             trend_id = trend_id_by_category.get(category)
 
+            # Same id `persist_postgres` already assigned (or generated)
+            # for this item, so the Astra document and the Postgres
+            # TrendItem row can be joined -- falls back to a fresh uuid
+            # only if this is called without persist_postgres having run
+            # first (defensive, not the normal path; see trend_worker.py).
+            trend_item_id = item.setdefault("trend_item_id", str(uuid.uuid4()))
+
             doc = {
-                "trend_item_id": str(uuid.uuid4()),
+                "trend_item_id": trend_item_id,
                 "report_id": report_id,
                 "trend_id": trend_id,
                 "category": category,
@@ -430,6 +476,17 @@ class TrendService:
 
             if self.astra_repository.save_trend_item(doc):
                 saved += 1
+
+            # Stage 2c: trend items are already atomic (Stage 2a's
+            # ingestion-path table) -- one embedding each, no chunking.
+            if doc["text"]:
+                self.embedding_service.save_chunk(
+                    report_id=report_id,
+                    content_type=CONTENT_TYPE_TREND_ITEM,
+                    text=doc["text"],
+                    evidence_id=doc["trend_item_id"],
+                    url=doc.get("url"),
+                )
 
         logger.info(
             "[TREND] Mirrored %d/%d items to Astra for report_id=%s",
