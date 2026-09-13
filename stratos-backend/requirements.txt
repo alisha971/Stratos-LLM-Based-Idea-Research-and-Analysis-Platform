@@ -15,6 +15,7 @@ astrapy
 aiofiles
 sse-starlette
 reportlab
+pypdf
 beautifulsoup4
 httpx
 groq
