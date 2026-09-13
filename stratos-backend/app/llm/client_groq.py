@@ -13,6 +13,7 @@ def generate_chat(
     key_label: str,
     model: str,
     temperature: float = 0.2,
+    max_tokens: int = 768,
 ) -> str:
     """
     Multi-turn chat completion against a specific named Groq credential.
@@ -30,7 +31,7 @@ def generate_chat(
         model=model,
         messages=messages,
         temperature=temperature,
-        max_tokens=768,
+        max_tokens=max_tokens,
         response_format={"type": "json_object"},
     )
 
