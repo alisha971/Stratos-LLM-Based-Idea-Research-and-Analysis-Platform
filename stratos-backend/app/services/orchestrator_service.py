@@ -9,11 +9,13 @@ import uuid, json
 from app.db import models
 from app.utils.state_machine import SessionState
 from app.utils.redis_pub import publish_event
+from app.utils.verdict_view import verdict_view
 from app.workers.clarification_worker import run_clarification
 from app.workers.outline_worker import run_outline
 from app.workers.research_worker import run_research
 from app.workers.trend_worker import run_trend
 from app.workers.section_worker import run_section_writer
+from app.workers.verdict_worker import run_verdict
 from app.workers.assembler_worker import run_assembler
 from app.workers.export_worker import run_export
 from app.services.evidence_bundle_service import EvidenceBundleService
@@ -23,17 +25,46 @@ from app.services.research_join_service import (
     missing_legs,
     record_leg_arrival,
 )
+from app.services.section_status_service import (
+    clear as clear_section_failures,
+    failed_section_ids,
+    record_section_failed,
+)
 from app.workers.competitor_worker import run_competitor
 
 logger = logging.getLogger(__name__)
 
-# *_failed events that don't kill the run: trend/competitor are best-effort
-# legs of the research fan-out, and the join (research_join_service) already
-# knows how to proceed without one. Every other *_failed event is fatal --
-# the pipeline has no other way to make progress, so it moves to FAILED
-# instead of leaving the session/report parked with no signal (see
-# handle_stage_failed).
-_NON_FATAL_FAILURE_EVENTS = {"trend_failed", "competitor_failed"}
+# Every *_failed event this pipeline actually emits, mapped to whether it
+# should be fatal to the whole run -- explicit, no default. An event type
+# not in this map is unrecognized and must not silently inherit either
+# behavior (see the `else` branch in handle_stage_failed): before this map
+# existed, fatality was "non-fatal if in a small allow-list, else fatal",
+# which made "kill the entire run" the silent default for any *new*
+# *_failed event -- exactly how section_failed ended up fatal by accident
+# (gap-closing plan Stage 1a added the catch-all; nothing added
+# section_failed to the allow-list at the same time).
+#
+# trend/competitor are best-effort legs of the research fan-out, and the
+# join (research_join_service) already knows how to proceed without one.
+# section_failed is non-fatal for the same shape of reason (Stage 1,
+# partial-report survival) -- see handle_section_done. verdict_failed is
+# non-fatal because sections are already fully written by the time the
+# verdict runs (Stage 4d), so losing the verdict should not lose the
+# report; assembly proceeds without one. Every other *_failed event is
+# fatal -- the pipeline has no other way to make progress, so it moves to
+# FAILED instead of leaving the session/report parked with no signal.
+_STAGE_FATALITY: dict[str, bool] = {
+    "clarification_failed": True,
+    "outline_failed": True,
+    "research_failed": True,
+    "trend_failed": False,
+    "competitor_failed": False,
+    "section_failed": False,
+    "section_writing_failed": True,
+    "verdict_failed": False,
+    "assembler_failed": True,
+    "export_failed": True,
+}
 
 
 class OrchestratorService:
@@ -378,6 +409,13 @@ class OrchestratorService:
         db: Session,
         report_id: str,
     ):
+        """Advances once every section has either produced chunks or
+        definitively failed (gap-closing plan Stage 1 / partial-report
+        survival) -- a report is not held hostage by one bad section.
+        Called both from the real `section_done` event and, via
+        handle_stage_failed, from `section_failed` -- a failure must
+        unblock this exactly like a completion does, or the run stalls at
+        WRITING_SECTIONS forever (no sweeper covers that state)."""
         report = db.query(models.Report).filter_by(id=report_id).first()
         if not report:
             return
@@ -408,7 +446,32 @@ class OrchestratorService:
                 .all()
             )
         }
-        if len(completed_section_ids) < len(sections):
+        failed_ids = failed_section_ids(report_id)
+        if len(completed_section_ids | failed_ids) < len(sections):
+            return
+
+        clear_section_failures(report_id)
+
+        if not completed_section_ids:
+            # Every section failed -- there is no report to assemble.
+            # Genuinely fatal, unlike a partial failure.
+            logger.error(
+                "[ORCHESTRATOR] All %d section(s) failed for report_id=%s",
+                len(sections),
+                report_id,
+            )
+            session.status = SessionState.FAILED.value
+            report.status = SessionState.FAILED.value
+            db.commit()
+            publish_event(
+                "pipeline_failed",
+                {
+                    "session_id": session.id,
+                    "report_id": report.id,
+                    "stage": "section",
+                    "error": "All sections failed to generate",
+                },
+            )
             return
 
         session.status = SessionState.READY_FOR_ASSEMBLY
@@ -421,11 +484,37 @@ class OrchestratorService:
                 "session_id": session.id,
                 "report_id": report.id,
                 "section_count": len(sections),
+                "failed_section_count": len(failed_ids),
             },
         )
 
     @staticmethod
     def handle_sections_done(
+        db: Session,
+        report_id: str,
+    ):
+        """Gap-closing plan Stage 4d: one link changed from before -- this
+        used to dispatch the assembler directly. The verdict now sits
+        between sections_done and assembly, reading the finished sections
+        so it can never contradict the body it sits on top of."""
+        report = db.query(models.Report).filter_by(id=report_id).first()
+        if not report:
+            return
+
+        session = (
+            db.query(models.Session)
+            .filter_by(id=report.session_id)
+            .first()
+        )
+        if session:
+            session.status = SessionState.WRITING_VERDICT
+        report.status = SessionState.WRITING_VERDICT
+        db.commit()
+
+        run_verdict.delay(report_id)
+
+    @staticmethod
+    def handle_verdict_ready(
         db: Session,
         report_id: str,
     ):
@@ -473,11 +562,28 @@ class OrchestratorService:
         session_id = payload.get("session_id")
         error = payload.get("error")
 
-        if event_type in _NON_FATAL_FAILURE_EVENTS:
-            # trend/competitor are best-effort legs of the research
-            # fan-out -- research_join_service already knows how to proceed
-            # without one via its timeout. A definitive failure should
-            # unblock the join immediately rather than waiting it out.
+        fatal = _STAGE_FATALITY.get(event_type)
+        if fatal is None:
+            # Not in the map at all -- an unrecognized *_failed event must
+            # not silently inherit fatal OR non-fatal behavior. Log loudly
+            # (distinct from the normal fatal-path error below, so it's
+            # operationally obvious this needs _STAGE_FATALITY updated) and
+            # default to fatal: a run that's incorrectly failed is at least
+            # visible and debuggable, while a run that silently stalls
+            # forever (the pre-Stage-1a bug this whole mechanism exists to
+            # fix) is not.
+            logger.critical(
+                "[ORCHESTRATOR] Unrecognized *_failed event_type=%s "
+                "report_id=%s session_id=%s -- not present in "
+                "_STAGE_FATALITY, defaulting to FATAL. Add this event to "
+                "the map in orchestrator_service.py.",
+                event_type,
+                report_id,
+                session_id,
+            )
+            fatal = True
+
+        if not fatal:
             logger.warning(
                 "[ORCHESTRATOR] Non-fatal stage failure event=%s "
                 "report_id=%s error=%s",
@@ -485,6 +591,27 @@ class OrchestratorService:
                 report_id,
                 error,
             )
+            if event_type == "verdict_failed":
+                # Sections are already fully written by the time the
+                # verdict runs (Stage 4d) -- proceed straight to assembly
+                # without one rather than parking an otherwise complete
+                # report forever.
+                if report_id:
+                    run_assembler.delay(report_id)
+                return
+
+            if event_type == "section_failed":
+                section_id = payload.get("section_id")
+                if report_id and section_id:
+                    record_section_failed(report_id, section_id)
+                if report_id:
+                    OrchestratorService.handle_section_done(db, report_id)
+                return
+
+            # trend/competitor are best-effort legs of the research
+            # fan-out -- research_join_service already knows how to proceed
+            # without one via its timeout. A definitive failure should
+            # unblock the join immediately rather than waiting it out.
             if report_id:
                 leg = "trend" if event_type == "trend_failed" else "competitor"
                 record_leg_arrival(report_id, leg)
@@ -603,7 +730,13 @@ class OrchestratorService:
                             "marker": citation.citation_marker,
                             "url": source.url if source else None,
                             "domain": source.domain if source else None,
-                            "title": source.domain if source else None,
+                            # Was hardcoded to source.domain regardless of
+                            # whether a real title existed (Stage 5b) --
+                            # now falls back to domain only when a real
+                            # title (SERP result title / competitor
+                            # product name) was never captured.
+                            "title": (source.title or source.domain) if source else None,
+                            "stance": (source.stance if source else None) or "neutral",
                         }
                     )
                 chunks_view.append(
@@ -623,9 +756,27 @@ class OrchestratorService:
                 }
             )
 
+        # "What we couldn't settle" needs this too (Stage 5c) -- the PDF
+        # gets it from the assembler's draft file, but the web view has no
+        # equivalent until now. Same computation EvidenceBundleService
+        # already does for the gaps section and the assembler; never fatal
+        # to the read (see unresolved_directives' own docstring).
+        unresolved_gaps: list[str] = []
+        if session and session.clarified_summary:
+            from app.services.evidence_bundle_service import EvidenceBundleService
+
+            unresolved_gaps = EvidenceBundleService(db).unresolved_directives(
+                report_id, session.clarified_summary
+            )
+
         return {
             "report_id": report.id,
             "status": report.status,
             "title": f"Market Research: {idea}" if idea else "Market Research Report",
+            # None until run_verdict completes, or if verdict_failed
+            # happened (Stage 4d, non-fatal) -- the frontend must render
+            # the report without a verdict block in that case, not error.
+            "verdict": verdict_view(report),
+            "unresolved_gaps": unresolved_gaps,
             "sections": sections_view,
         }

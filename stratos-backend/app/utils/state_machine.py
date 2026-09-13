@@ -16,6 +16,11 @@ class SessionState(str, Enum):
     OUTLINE_GENERATED = "OUTLINE_GENERATED"
     RESEARCH_RUNNING = "RESEARCH_RUNNING"
     WRITING_SECTIONS = "WRITING_SECTIONS"
+    # Gap-closing plan Stage 4: sections are done, the verdict is being
+    # synthesized before assembly. A verdict failure is non-fatal --
+    # handle_stage_failed proceeds straight to run_assembler rather than
+    # moving to FAILED, since the sections themselves are already complete.
+    WRITING_VERDICT = "WRITING_VERDICT"
     READY_FOR_ASSEMBLY = "READY_FOR_ASSEMBLY"
     READY_FOR_EXPORT = "READY_FOR_EXPORT"
     EXPORTED = "EXPORTED"

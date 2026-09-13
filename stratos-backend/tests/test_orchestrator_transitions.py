@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.db import models
 from app.db.database import SessionLocal
 from app.services import research_join_service as join_service
+from app.services import section_status_service
 from app.services.orchestrator_service import OrchestratorService
 from app.utils.redis_pub import redis_client
 from app.utils.state_machine import SessionState
@@ -39,6 +40,7 @@ def _cleanup():
     yield
     for report_id in _touched_report_ids:
         join_service.clear(report_id)
+        section_status_service.clear(report_id)
     _touched_report_ids.clear()
 
     db = SessionLocal()
@@ -330,6 +332,161 @@ class StageFailureTests(unittest.TestCase):
             db.close()
 
 
+class SectionFailureTests(unittest.TestCase):
+    """Gap-closing plan Stage 1 / partial-report survival. Before this,
+    `section_failed` fell into Stage 1a's `*_failed` catch-all with no entry
+    in `_STAGE_FATALITY`'s predecessor (`_NON_FATAL_FAILURE_EVENTS`), so a
+    single failed section marked the whole report FAILED -- discarding
+    every other section that succeeded. Naively adding it to the non-fatal
+    set alone would have made the run hang forever instead (`handle_section_
+    done`'s old completion count never reached len(sections) once one
+    section could never produce chunks); these tests cover both halves of
+    the actual fix together."""
+
+    def _mark_done(self, db, section_id: str) -> None:
+        db.add(
+            models.Chunk(
+                id=str(uuid.uuid4()),
+                section_id=section_id,
+                chunk_text="Some finished section text [CIT-001].",
+                chunk_index=1,
+            )
+        )
+        db.commit()
+
+    def test_one_section_failed_others_done_reaches_ready_for_assembly(self):
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_SECTIONS.value, section_count=2
+            )
+            sections = (
+                db.query(models.Section)
+                .filter_by(report_id=report.id)
+                .order_by(models.Section.order_index)
+                .all()
+            )
+            self._mark_done(db, sections[0].id)
+
+            with patch(
+                "app.services.orchestrator_service.publish_event"
+            ) as mock_publish:
+                OrchestratorService.handle_stage_failed(
+                    db,
+                    event_type="section_failed",
+                    payload={
+                        "report_id": report.id,
+                        "section_id": sections[1].id,
+                        "error": "both Groq keys exhausted",
+                    },
+                )
+                assert all(
+                    call.args[0] != "pipeline_failed"
+                    for call in mock_publish.call_args_list
+                )
+                sections_done_calls = [
+                    call for call in mock_publish.call_args_list
+                    if call.args[0] == "sections_done"
+                ]
+                assert len(sections_done_calls) == 1
+                assert sections_done_calls[0].args[1]["failed_section_count"] == 1
+
+            db.refresh(session)
+            db.refresh(report)
+            assert session.status == SessionState.READY_FOR_ASSEMBLY.value
+            assert report.status == SessionState.READY_FOR_ASSEMBLY.value
+        finally:
+            db.close()
+
+    def test_all_sections_failed_sets_terminal_state(self):
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_SECTIONS.value, section_count=2
+            )
+            sections = (
+                db.query(models.Section)
+                .filter_by(report_id=report.id)
+                .order_by(models.Section.order_index)
+                .all()
+            )
+
+            with patch(
+                "app.services.orchestrator_service.publish_event"
+            ) as mock_publish:
+                OrchestratorService.handle_stage_failed(
+                    db,
+                    event_type="section_failed",
+                    payload={
+                        "report_id": report.id,
+                        "section_id": sections[0].id,
+                        "error": "boom",
+                    },
+                )
+                OrchestratorService.handle_stage_failed(
+                    db,
+                    event_type="section_failed",
+                    payload={
+                        "report_id": report.id,
+                        "section_id": sections[1].id,
+                        "error": "boom",
+                    },
+                )
+                pipeline_failed_calls = [
+                    call for call in mock_publish.call_args_list
+                    if call.args[0] == "pipeline_failed"
+                ]
+                assert len(pipeline_failed_calls) == 1
+                assert pipeline_failed_calls[0].args[1]["stage"] == "section"
+
+            db.refresh(session)
+            db.refresh(report)
+            assert session.status == SessionState.FAILED.value
+            assert report.status == SessionState.FAILED.value
+        finally:
+            db.close()
+
+    def test_duplicate_section_failed_does_not_double_count(self):
+        """A retried/redelivered section_failed for the same section_id
+        must not unblock the join twice or count it as two failures."""
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_SECTIONS.value, section_count=2
+            )
+            sections = (
+                db.query(models.Section)
+                .filter_by(report_id=report.id)
+                .order_by(models.Section.order_index)
+                .all()
+            )
+            self._mark_done(db, sections[0].id)
+
+            with patch(
+                "app.services.orchestrator_service.publish_event"
+            ) as mock_publish:
+                for _ in range(3):
+                    OrchestratorService.handle_stage_failed(
+                        db,
+                        event_type="section_failed",
+                        payload={
+                            "report_id": report.id,
+                            "section_id": sections[1].id,
+                            "error": "boom",
+                        },
+                    )
+                sections_done_calls = [
+                    call for call in mock_publish.call_args_list
+                    if call.args[0] == "sections_done"
+                ]
+                # Advances once, on the first delivery -- session.status is
+                # no longer WRITING_SECTIONS afterward, so handle_section_
+                # done's own early-return guard absorbs the 2nd/3rd retries.
+                assert len(sections_done_calls) == 1
+        finally:
+            db.close()
+
+
 class ConsentTopicTests(unittest.TestCase):
     def test_accept_consent_sets_report_topic_from_idea(self):
         db = SessionLocal()
@@ -344,5 +501,78 @@ class ConsentTopicTests(unittest.TestCase):
 
             db.refresh(report)
             assert report.topic == "A meal-prep app for medical residents."
+        finally:
+            db.close()
+
+
+class VerdictTransitionTests(unittest.TestCase):
+    """Gap-closing plan Stage 4d: sections_done -> verdict -> assembler.
+    Only one link changed from the pre-Stage-4 chain (sections_done used to
+    dispatch the assembler directly) -- these confirm the new link and that
+    a verdict failure is non-fatal, per the same _NON_FATAL_FAILURE_EVENTS
+    mechanism ResearchJoinTests/StageFailureTests already cover for
+    trend/competitor."""
+
+    def test_sections_done_moves_to_writing_verdict_and_dispatches_verdict(self):
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_SECTIONS.value
+            )
+
+            with patch("app.services.orchestrator_service.run_verdict") as mock_verdict:
+                OrchestratorService.handle_sections_done(db, report.id)
+                assert mock_verdict.delay.call_count == 1
+                assert mock_verdict.delay.call_args[0][0] == report.id
+
+            db.refresh(session)
+            db.refresh(report)
+            assert session.status == SessionState.WRITING_VERDICT.value
+            assert report.status == SessionState.WRITING_VERDICT.value
+        finally:
+            db.close()
+
+    def test_verdict_ready_dispatches_assembler(self):
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_VERDICT.value
+            )
+
+            with patch("app.services.orchestrator_service.run_assembler") as mock_assembler:
+                OrchestratorService.handle_verdict_ready(db, report.id)
+                assert mock_assembler.delay.call_count == 1
+                assert mock_assembler.delay.call_args[0][0] == report.id
+        finally:
+            db.close()
+
+    def test_verdict_failed_is_non_fatal_and_proceeds_to_assembler(self):
+        """Sections are already fully written by the time the verdict
+        runs -- a verdict failure must not lose the report; it proceeds
+        straight to assembly instead of moving to FAILED."""
+        db = SessionLocal()
+        try:
+            session, report = _make_report(
+                db, session_status=SessionState.WRITING_VERDICT.value
+            )
+
+            with patch("app.services.orchestrator_service.publish_event") as mock_publish, \
+                 patch("app.services.orchestrator_service.run_assembler") as mock_assembler:
+                OrchestratorService.handle_stage_failed(
+                    db,
+                    event_type="verdict_failed",
+                    payload={"report_id": report.id, "error": "LLM validation exhausted"},
+                )
+                assert all(
+                    call.args[0] != "pipeline_failed"
+                    for call in mock_publish.call_args_list
+                )
+                assert mock_assembler.delay.call_count == 1
+                assert mock_assembler.delay.call_args[0][0] == report.id
+
+            db.refresh(session)
+            db.refresh(report)
+            assert session.status == SessionState.WRITING_VERDICT.value  # untouched, not FAILED
+            assert report.status == SessionState.WRITING_VERDICT.value
         finally:
             db.close()

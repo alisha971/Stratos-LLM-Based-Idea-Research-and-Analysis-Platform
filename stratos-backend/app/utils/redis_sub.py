@@ -101,6 +101,16 @@ def start_event_listener():
             finally:
                 db.close()
 
+        elif event_type == "verdict_ready":
+            db = SessionLocal()
+            try:
+                OrchestratorService.handle_verdict_ready(
+                    db=db,
+                    report_id=payload["report_id"],
+                )
+            finally:
+                db.close()
+
         elif event_type == "report_assembled":
             db = SessionLocal()
             try:
@@ -117,7 +127,15 @@ def start_event_listener():
         # drove any state change -- a failure just stalled the session
         # silently, forever. Placed last so it can never shadow one of the
         # specific branches above (none of them end in "_failed").
-        elif event_type and event_type.endswith("_failed"):
+        #
+        # Exclude "pipeline_failed" itself: it's the OUTPUT
+        # handle_stage_failed publishes once a run is marked FAILED, not an
+        # input stage failure. Without this exclusion it re-enters this
+        # same catch-all (it also ends in "_failed") and loops back into
+        # handle_stage_failed a second time for the same report -- harmless
+        # today only because of that function's idempotency guard, not
+        # because the routing is actually correct.
+        elif event_type and event_type.endswith("_failed") and event_type != "pipeline_failed":
             db = SessionLocal()
             try:
                 OrchestratorService.handle_stage_failed(

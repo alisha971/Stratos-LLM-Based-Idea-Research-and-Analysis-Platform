@@ -29,6 +29,7 @@ for module_name in (
     "app.workers.join_worker",
     "app.workers.section_worker",
     "app.workers.embedding_worker",
+    "app.workers.verdict_worker",
     "app.workers.assembler_worker",
     "app.workers.export_worker",
 ):
