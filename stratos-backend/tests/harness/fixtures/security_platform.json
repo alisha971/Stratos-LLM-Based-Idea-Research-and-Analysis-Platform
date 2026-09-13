@@ -1,0 +1,62 @@
+{
+  "idea": "A threat intelligence platform that scans the dark web for leaked corporate credentials and alerts security teams.",
+  "clarified_summary": {
+    "final_schema": {
+      "proposed_solution": "A threat intelligence platform monitoring dark web credential leaks.",
+      "target_persona": "Enterprise security teams."
+    },
+    "research_directives": []
+  },
+  "sections": [
+    "Problem Context & Validation",
+    "Market & Industry Trends"
+  ],
+  "_regression_note": "The OFF_TOPIC_TERMS regression fixture (gap-closing plan Stage 6). ev-1/ev-2/ev-3 legitimately use the exact vocabulary (crypto, dark web, malware, threat intelligence) the deleted OFF_TOPIC_TERMS constant used to statically penalize -- they must rank HIGH, not be suppressed. ev-8 is genuine noise (unrelated topic entirely) and should rank low on its own lack of summary overlap, not because of any off-topic keyword filter.",
+  "evidence_items": [
+    {
+      "evidence_id": "ev-1",
+      "source_id": "src-1",
+      "url": "https://example.com/leak-report",
+      "domain": "example.com",
+      "quote": "Threat intelligence firms report a sharp rise in corporate credentials leaked on dark web marketplaces this year, exposing employees to further malware campaigns.",
+      "stance": "supports",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-2",
+      "source_id": "src-2",
+      "url": "https://example.com/siem-bundling",
+      "domain": "example.com",
+      "quote": "Most large enterprise security teams already have dark web monitoring bundled into their existing SIEM and threat intelligence platforms, reducing the case for a standalone tool.",
+      "stance": "challenges",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-3",
+      "source_id": "src-3",
+      "url": "https://example.com/market-growth",
+      "domain": "example.com",
+      "quote": "The global threat intelligence market grew an estimated 24 percent annually over the past three years, driven by rising ransomware and crypto-related fraud.",
+      "stance": "supports",
+      "relevant_sections": ["Market & Industry Trends"]
+    },
+    {
+      "evidence_id": "ev-4",
+      "source_id": "src-4",
+      "url": "https://example.com/breach-cost",
+      "domain": "example.com",
+      "quote": "The average cost of a corporate data breach involving leaked credentials now exceeds four million dollars, according to industry incident-response data.",
+      "stance": "supports",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-8",
+      "source_id": "src-8",
+      "url": "https://example.com/unrelated-meal-kits",
+      "domain": "example.com",
+      "quote": "Three well-funded meal-kit startups targeting healthcare workers have shut down in the past two years, citing thin margins and high acquisition costs.",
+      "stance": "neutral",
+      "relevant_sections": []
+    }
+  ]
+}

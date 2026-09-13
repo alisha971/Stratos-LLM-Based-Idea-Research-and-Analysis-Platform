@@ -1,0 +1,90 @@
+{
+  "idea": "A meal-prep subscription app for medical residents who have no time to cook during long hospital shifts.",
+  "clarified_summary": {
+    "final_schema": {
+      "proposed_solution": "A meal-prep subscription app for medical residents.",
+      "target_persona": "Medical residents working long hospital shifts."
+    },
+    "research_directives": []
+  },
+  "sections": [
+    "Problem Context & Validation",
+    "Competitor Landscape",
+    "Risks & Open Questions"
+  ],
+  "_regression_note": "The topic-drift fixture (gap-closing plan Stage 6). ev-9/ev-10 are freelancer/gig-economy noise -- the exact vocabulary the old SECTION_PREFERENCES dict was hand-tuned on, tested here to confirm a healthcare idea's own evidence isn't penalized for lacking it, and that the noise itself doesn't outrank genuinely relevant healthcare evidence just by accident.",
+  "evidence_items": [
+    {
+      "evidence_id": "ev-1",
+      "source_id": "src-1",
+      "url": "https://example.com/resident-survey",
+      "domain": "example.com",
+      "quote": "A 2024 survey found 78 percent of medical residents report skipping meals during hospital shifts due to lack of time to cook or shop for groceries.",
+      "stance": "supports",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-2",
+      "source_id": "src-2",
+      "url": "https://example.com/hospital-cafeteria",
+      "domain": "example.com",
+      "quote": "Most teaching hospitals already operate 24/7 cafeterias offering discounted meals to residents, reducing the urgency of a paid subscription service.",
+      "stance": "challenges",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-3",
+      "source_id": "src-3",
+      "url": "https://example.com/meal-gap-analysis",
+      "domain": "example.com",
+      "quote": "No existing meal-prep service specifically targets the unpredictable, rotating shift schedules that define residency programs.",
+      "stance": "supports",
+      "relevant_sections": ["Competitor Landscape"]
+    },
+    {
+      "evidence_id": "ev-4",
+      "source_id": "src-4",
+      "url": "https://example.com/meal-kit-shutdowns",
+      "domain": "example.com",
+      "quote": "Three well-funded meal-kit startups targeting healthcare workers have shut down in the past two years, citing thin margins and high customer acquisition costs.",
+      "stance": "challenges",
+      "relevant_sections": ["Competitor Landscape"]
+    },
+    {
+      "evidence_id": "ev-5",
+      "source_id": "src-5",
+      "url": "https://example.com/food-safety-rules",
+      "domain": "example.com",
+      "quote": "Prepared-meal delivery services are subject to state food-safety licensing requirements that vary significantly by jurisdiction.",
+      "stance": "neutral",
+      "relevant_sections": ["Risks & Open Questions"]
+    },
+    {
+      "evidence_id": "ev-6",
+      "source_id": "src-6",
+      "url": "https://example.com/resident-hours",
+      "domain": "example.com",
+      "quote": "ACGME rules cap resident duty hours at 80 per week, but shift timing remains unpredictable across specialties.",
+      "stance": "neutral",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-9",
+      "source_id": "src-9",
+      "url": "https://example.com/freelance-marketplace",
+      "domain": "example.com",
+      "quote": "Freelance developers on Upwork and Fiverr report growing competition from low-cost overseas bidders on job boards, squeezing hourly rates for client work.",
+      "stance": "neutral",
+      "relevant_sections": []
+    },
+    {
+      "evidence_id": "ev-10",
+      "source_id": "src-10",
+      "url": "https://example.com/telegram-automation",
+      "domain": "example.com",
+      "quote": "A Telegram bot automation tool for monitoring Discord job postings has attracted a niche audience of freelance automation enthusiasts.",
+      "stance": "neutral",
+      "relevant_sections": []
+    }
+  ]
+}

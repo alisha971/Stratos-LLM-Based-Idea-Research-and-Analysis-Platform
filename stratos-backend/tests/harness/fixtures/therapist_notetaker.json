@@ -1,0 +1,53 @@
+{
+  "idea": "An AI note-taker for therapists that transcribes and summarizes therapy sessions.",
+  "clarified_summary": {
+    "final_schema": {
+      "proposed_solution": "An AI note-taker for licensed therapists.",
+      "target_persona": "Independent and small-practice therapists."
+    },
+    "research_directives": []
+  },
+  "sections": [
+    "Problem Context & Validation",
+    "Risks & Open Questions"
+  ],
+  "_regression_note": "The thin/one-sided evidence fixture (gap-closing plan Stage 6) -- deliberately NO 'supports' items at all. Exercises: (a) stance-slot reservation degrading correctly when one side genuinely has zero evidence, rather than padding with irrelevant material to force balance, and (b) the verdict's 'no confident filler' guardrail -- a verdict built only from this fixture should read low/medium confidence and an honestly weak case_for, not a fabricated strong one.",
+  "evidence_items": [
+    {
+      "evidence_id": "ev-1",
+      "source_id": "src-1",
+      "url": "https://example.com/hipaa-burden",
+      "domain": "example.com",
+      "quote": "AI transcription tools for therapy sessions face substantial HIPAA compliance burden, including business associate agreements and strict audio-retention rules that many small vendors underestimate.",
+      "stance": "challenges",
+      "relevant_sections": ["Risks & Open Questions"]
+    },
+    {
+      "evidence_id": "ev-2",
+      "source_id": "src-2",
+      "url": "https://example.com/ehr-incumbents",
+      "domain": "example.com",
+      "quote": "Incumbent EHR vendors used by most therapy practices have already begun bundling AI note-taking features into their existing platforms at no extra cost.",
+      "stance": "challenges",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-3",
+      "source_id": "src-3",
+      "url": "https://example.com/therapist-count",
+      "domain": "example.com",
+      "quote": "There are an estimated 320,000 licensed therapists practicing in the United States as of the most recent labor statistics.",
+      "stance": "neutral",
+      "relevant_sections": ["Problem Context & Validation"]
+    },
+    {
+      "evidence_id": "ev-4",
+      "source_id": "src-4",
+      "url": "https://example.com/state-recording-law",
+      "domain": "example.com",
+      "quote": "Several states require two-party consent before any session audio can be recorded, adding a compliance step before a note-taking tool can even be used.",
+      "stance": "challenges",
+      "relevant_sections": ["Risks & Open Questions"]
+    }
+  ]
+}
