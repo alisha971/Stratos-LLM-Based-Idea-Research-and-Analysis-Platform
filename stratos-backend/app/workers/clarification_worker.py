@@ -1,6 +1,7 @@
 # app/workers/clarification_worker.py
 
 import json, re
+import logging
 import uuid
 from typing import Any
 
@@ -23,6 +24,9 @@ from app.utils.clarification_schema import (
     unresolved_fields,
 )
 from app.utils.redis_pub import publish_event
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 CONFIDENCE_THRESHOLD = 0.95
 
@@ -254,37 +258,58 @@ def run_clarification(self, session_id: str):
         )
         force_finish = len(chat_messages) >= MAX_TOTAL_MESSAGES and idea_captured
 
-        messages = [
-            {"role": "system", "content": CLARIFICATION_CONTROLLER_PROMPT}
-        ]
+        def _call_and_parse(system_prompt: str) -> dict[str, Any]:
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in chat_messages:
+                messages.append({
+                    "role": msg.role,
+                    "content": msg.message,
+                })
 
-        for msg in chat_messages:
-            messages.append({
-                "role": msg.role,
-                "content": msg.message,
-            })
+            raw_output = generate_chat(
+                messages=messages,
+                temperature=0.2,
+                task="clarification",
+            )
 
-        raw_output = generate_chat(
-            messages=messages,
-            temperature=0.2,
-            task="clarification",
-        )
+            raw_output = raw_output.strip()
 
-        raw_output = raw_output.strip()
+            # Guard 1: empty response
+            if not raw_output:
+                raise ValueError("LLM returned empty response")
 
-        # Guard 1: empty response
-        if not raw_output:
-            raise ValueError("LLM returned empty response")
+            # Guard 2: extract JSON object if extra text exists
+            try:
+                return json.loads(raw_output)
+            except json.JSONDecodeError:
+                # Attempt to extract JSON block
+                match = re.search(r"\{.*\}", raw_output, re.DOTALL)
+                if not match:
+                    raise ValueError(f"Invalid JSON from LLM: {raw_output[:300]}")
+                return json.loads(match.group(0))
 
-        # Guard 2: extract JSON object if extra text exists
+        # LLM JSON reliability plan §4: a non-retryable Groq failure
+        # (RuntimeError from generate_chat) or a bad/empty response
+        # (ValueError from the guards above) gets exactly one repair retry --
+        # same shape as section_worker.py / verdict_worker.py -- instead of
+        # failing the whole clarification turn (clarification_failed is a
+        # fatal, session-ending event; see orchestrator_service.py) on a
+        # single flaky call.
         try:
-            result = json.loads(raw_output)
-        except json.JSONDecodeError:
-            # Attempt to extract JSON block
-            match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-            if not match:
-                raise ValueError(f"Invalid JSON from LLM: {raw_output[:300]}")
-            result = json.loads(match.group(0))
+            result = _call_and_parse(CLARIFICATION_CONTROLLER_PROMPT)
+        except (ValueError, RuntimeError) as exc:
+            logger.info(
+                "[CLARIFICATION] Repairing failed response session_id=%s reason=%s",
+                session_id,
+                exc,
+            )
+            repair_prompt = (
+                CLARIFICATION_CONTROLLER_PROMPT
+                + "\n\nREPAIR REQUIRED:\n"
+                + f"{exc}\n"
+                + "Regenerate the full JSON so the response is valid."
+            )
+            result = _call_and_parse(repair_prompt)
 
         existing_schema = session.clarification_schema or {}
 

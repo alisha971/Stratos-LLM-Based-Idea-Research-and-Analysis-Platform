@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 import json, re
+import logging
 
 from app.workers.celery_app import celery_app
 from app.db.session import SessionLocal
@@ -7,6 +8,9 @@ from app.db import models
 from app.llm.client import generate_chat
 from app.llm.prompts import OUTLINE_PROMPT
 from app.utils.redis_pub import publish_event
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 CORE_SECTIONS = [
     "Problem Context & Validation",
@@ -56,13 +60,35 @@ def run_outline(self, report_id: str):
             session.clarified_summary
         )
 
-        raw_output = generate_chat(
-            messages=[{"role": "system", "content": prompt}],
-            temperature=0.2,
-            task="outline",
-        )
+        def _generate_and_parse(system_prompt: str) -> list[str]:
+            raw_output = generate_chat(
+                messages=[{"role": "system", "content": system_prompt}],
+                temperature=0.2,
+                task="outline",
+            )
+            return parse_outline(raw_output)
 
-        section_titles = parse_outline(raw_output)
+        # LLM JSON reliability plan §4: same one-shot repair retry as
+        # clarification_worker.py / section_worker.py / verdict_worker.py --
+        # outline_failed is a fatal, session-ending event (see
+        # orchestrator_service.py), so a single non-retryable Groq failure
+        # (RuntimeError) or malformed output (ValueError from parse_outline)
+        # shouldn't kill the run without one retry.
+        try:
+            section_titles = _generate_and_parse(prompt)
+        except (ValueError, RuntimeError) as exc:
+            logger.info(
+                "[OUTLINE] Repairing failed draft report_id=%s reason=%s",
+                report_id,
+                exc,
+            )
+            repair_prompt = (
+                prompt
+                + "\n\nREPAIR REQUIRED:\n"
+                + f"{exc}\n"
+                + "Regenerate the full JSON so the outline is valid."
+            )
+            section_titles = _generate_and_parse(repair_prompt)
 
         # -------------------------------
         # Idempotent persistence
