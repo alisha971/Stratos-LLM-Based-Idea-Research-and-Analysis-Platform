@@ -43,7 +43,11 @@ def run_trend(self, report_id: str):
         publish_event("scanning_trends", {"report_id": report_id})
 
         service = TrendService(db=db)
-        queries = service.generate_queries(session.clarified_summary)
+        queries = service.generate_queries(
+            session.clarified_summary,
+            idea_description=session.idea_description or "",
+            report_id=report_id,
+        )
         logger.info("[TREND] Generated %d queries", len(queries))
 
         # --------------------------------------------------
