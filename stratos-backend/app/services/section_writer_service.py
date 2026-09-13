@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db import models
+from app.llm.json_parse import parse_json_object
 from app.llm.prompts import SECTION_WRITER_PROMPT
 from app.services.astra_evidence_repository import AstraEvidenceRepository
 from app.services.evidence_bundle_service import EvidenceBundleService
@@ -111,8 +112,13 @@ class SectionWriterService:
             .all()
         )
 
-        astra_items = self._fetch_astra_items(report_id, section.id, section.title)
-        fallback_items = self._fetch_postgres_fallback_items(report_id, section.title)
+        clarified_summary = session.clarified_summary
+        astra_items = self._fetch_astra_items(
+            report_id, section.id, section.title, clarified_summary
+        )
+        fallback_items = self._fetch_postgres_fallback_items(
+            report_id, section.title, clarified_summary
+        )
         evidence_items = astra_items or fallback_items
         if not evidence_items:
             raise ValueError("Missing evidence bundle")
@@ -291,17 +297,19 @@ class SectionWriterService:
         report_id: str,
         section_id: str,
         section_title: str,
+        clarified_summary: str,
     ) -> list[dict[str, Any]]:
         bundle = self.astra_repository.get_evidence_bundle(
             report_id=report_id,
             section_id=section_id,
         )
         if bundle and isinstance(bundle.get("items"), list):
-            return self._normalize_evidence_items(
-                bundle["items"],
-                section_title,
-                "astra_bundle",
-            )
+            # Already fully ranked by EvidenceBundleService (hybrid lexical
+            # + semantic fusion, diversified, stance-balanced, source-capped)
+            # -- do NOT re-rank here. This used to be re-sorted by the flat
+            # keyword-count `_relevance_score` below, which silently
+            # discarded that ordering even on a cache HIT.
+            return self._finalize_evidence_items(bundle["items"], "astra_bundle")
 
         raw_items: list[dict[str, Any]] = []
         raw_items.extend(self.astra_repository.fetch_evidence(report_id, section_title))
@@ -309,12 +317,19 @@ class SectionWriterService:
         raw_items.extend(
             self.astra_repository.fetch_competitor_insights(report_id, section_title)
         )
-        return self._normalize_evidence_items(raw_items, section_title, "astra")
+        ranked = self._hybrid_rank(
+            report_id=report_id,
+            clarified_summary=clarified_summary,
+            section_title=section_title,
+            evidence_items=raw_items,
+        )
+        return self._finalize_evidence_items(ranked, "astra")
 
     def _fetch_postgres_fallback_items(
         self,
         report_id: str,
         section_title: str,
+        clarified_summary: str,
     ) -> list[dict[str, Any]]:
         sources = (
             self.db.query(models.Source)
@@ -338,23 +353,53 @@ class SectionWriterService:
                     }
                 )
 
-        return self._normalize_evidence_items(raw_items, section_title, "postgres")
+        ranked = self._hybrid_rank(
+            report_id=report_id,
+            clarified_summary=clarified_summary,
+            section_title=section_title,
+            evidence_items=raw_items,
+        )
+        return self._finalize_evidence_items(ranked, "postgres")
 
-    def _normalize_evidence_items(
+    def _hybrid_rank(
         self,
-        raw_items: list[dict[str, Any]],
+        *,
+        report_id: str,
+        clarified_summary: str,
         section_title: str,
-        source_mode: str,
+        evidence_items: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        ranked = sorted(
-            raw_items,
-            key=lambda item: self._relevance_score(section_title, item),
-            reverse=True,
+        """Routes both cache-miss retrieval paths through the same hybrid
+        ranker EvidenceBundleService uses for the happy path (gap-closing
+        plan Stage 4), instead of the old flat keyword-count
+        `_relevance_score` sort -- so evidence quality no longer depends on
+        whether the per-section bundle cache happened to hit. Also picks up
+        Stage 2a's per-source cap (MAX_CHUNKS_PER_SOURCE) and Stage 3f's
+        stance-slot reservation, neither of which the old fallback had."""
+        return EvidenceBundleService(
+            self.db, astra_repository=self.astra_repository
+        ).hybrid_rank_for_section(
+            report_id=report_id,
+            clarified_summary=clarified_summary,
+            section_title=section_title,
+            evidence_items=evidence_items,
         )
 
-        normalized: list[dict[str, Any]] = []
+    def _finalize_evidence_items(
+        self,
+        items: list[dict[str, Any]],
+        source_mode: str,
+    ) -> list[dict[str, Any]]:
+        """Adds the two fields the ranker's normalized shape doesn't carry
+        (`astra_evidence_id`, `source_mode`) and drops anything unusable
+        (no source_id/quote) or duplicate. Does NOT re-rank, re-sort, or
+        re-cap -- `items` already arrived in the order and size (<=
+        evidence_bundle_service.BUNDLE_SIZE) whichever ranking path
+        produced, and re-deriving that here is exactly the bug this method
+        replaces (see _fetch_astra_items)."""
+        finalized: list[dict[str, Any]] = []
         seen_quotes: set[str] = set()
-        for item in ranked:
+        for item in items:
             source_id = item.get("source_id")
             quote = item.get("quote") or item.get("snippet") or item.get("text")
             if not source_id or not quote:
@@ -366,7 +411,7 @@ class SectionWriterService:
                 continue
             seen_quotes.add(fingerprint)
 
-            normalized.append(
+            finalized.append(
                 {
                     "source_id": str(source_id),
                     "astra_evidence_id": item.get("evidence_id")
@@ -384,10 +429,7 @@ class SectionWriterService:
                 }
             )
 
-            if len(normalized) >= 15:
-                break
-
-        return normalized
+        return finalized
 
     def _build_citation_marker_map(
         self,
@@ -437,19 +479,7 @@ class SectionWriterService:
         )
 
     def _parse_json(self, raw_output: str) -> dict[str, Any]:
-        cleaned = raw_output.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
-            cleaned = re.sub(r"```$", "", cleaned).strip()
-
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Section Writer LLM output is not valid JSON") from exc
-
-        if not isinstance(data, dict):
-            raise ValueError("Section Writer LLM output must be a JSON object")
-        return data
+        return parse_json_object(raw_output, label="Section Writer")
 
     def _matches_section_title(self, section_title: str, text: str) -> bool:
         keywords = self._keywords_for_title(section_title)
@@ -493,11 +523,3 @@ class SectionWriterService:
     def _keyword_score(self, text: str, keywords: set[str]) -> int:
         words = set(re.findall(r"[a-zA-Z][a-zA-Z-]+", text.lower()))
         return len(words.intersection(keywords))
-
-    def _relevance_score(self, section_title: str, item: dict[str, Any]) -> int:
-        haystack = " ".join(
-            str(item.get(key, ""))
-            for key in ("title", "type", "quote", "snippet", "text", "domain")
-        ).lower()
-        keywords = self._keywords_for_title(section_title)
-        return sum(1 for keyword in keywords if keyword in haystack)

@@ -27,12 +27,12 @@ def run_section_writer(self, report_id: str, section_id: str):
         service = SectionWriterService(db=db)
         context = service.build_section_context(report_id, section_id)
 
-        draft = service.generate_section_draft(context)
         try:
+            draft = service.generate_section_draft(context)
             service.validate_section_draft(draft, context)
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             logger.info(
-                "[SECTION] Repairing invalid draft report_id=%s section_id=%s reason=%s",
+                "[SECTION] Repairing failed draft report_id=%s section_id=%s reason=%s",
                 report_id,
                 section_id,
                 exc,
