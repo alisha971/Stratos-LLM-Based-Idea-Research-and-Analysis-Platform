@@ -138,12 +138,16 @@ class SectionWriterValidationTests(unittest.TestCase):
             }
         ]
 
-        normalized = self.service._normalize_evidence_items(
+        # _finalize_evidence_items (gap-closing plan Stage 4) replaces
+        # _normalize_evidence_items -- it no longer re-ranks by section
+        # title (that's EvidenceBundleService's hybrid ranker's job now,
+        # and the astra_bundle path is already ranked), so it takes no
+        # section_title argument.
+        finalized = self.service._finalize_evidence_items(
             items,
-            "Competitor Landscape",
             "astra_bundle",
         )
-        citation_map = self.service._build_citation_marker_map(normalized)
+        citation_map = self.service._build_citation_marker_map(finalized)
 
         self.assertIn("CIT-004", citation_map)
         self.assertEqual(citation_map["CIT-004"]["astra_evidence_id"], "evidence-1")
