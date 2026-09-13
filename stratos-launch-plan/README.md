@@ -1,6 +1,6 @@
 # Stratos Launch Plan — Master Index
 
-**Stratos** is an AI market-research analyst. A user types a startup/market idea, the system asks clarifying questions, researches the web (search results, news, trends, papers), and produces a cited, multi-section market research report as a downloadable PDF — in minutes instead of the days/weeks an analyst or a $2,000 report would take.
+**Stratos** is a reasoning instrument that turns a vague idea into a defensible decision. A user types a startup/market idea, the system interviews them to pin down the real thesis, researches the web **for and against it** (search results, news, trends, papers), and produces a cited, two-sided brief — evidence for, evidence against, stated unknowns, and a weighed verdict — as a downloadable PDF, in minutes instead of the days/weeks an analyst or a $2,000 report would take. See [16-PRODUCT-THESIS.md](16-PRODUCT-THESIS.md) for the product identity every plan below must serve.
 
 This folder is the **complete playbook** to take Stratos from its current state (working-but-rough MVP pipeline) to a **production SaaS with paying users**. It is written so that a junior developer, a low-effort coding model, or even a motivated non-technical person can follow it step by step.
 
@@ -27,6 +27,7 @@ Read the docs **in order** the first time. After that, jump to whichever doc mat
 | 13 | [Technical Deep-Dive](13-TECHNICAL-DEEP-DIVE.md) | How the system actually works through SDE, agentic-AI, and RAG lenses: event architecture, ranking math, scraper funnel, the full citation lifecycle — with code citations | Anyone who must understand or defend the internals |
 | 14 | [Design Decisions (ADR)](14-DESIGN-DECISIONS.md) | Every significant decision: chose / instead of / why / trade-off / revisit-when — 22 decisions covering architecture, data, AI, security, infra | Anyone tempted to change an architectural choice — read the ADR first |
 | 15 | [Skills Guide](15-SKILLS-GUIDE.md) | The seven Cursor Agent Skills shipped in `.cursor/skills/` (task executor, contract guard, worker upgrade, security gate, LLM prompts, pipeline debug, deploy) and recipes for driving AI agents with them | Anyone using AI agents to implement this project |
+| 16 | [Product Thesis](16-PRODUCT-THESIS.md) | What Stratos *is* — the reasoned-verdict edge (stance-tagged evidence, weighed verdict, unknowns), competitive grounding, and the per-worker implementation deltas | Everyone, before changing prompts, workers, or positioning |
 | — | [prompts/](prompts/README.md) | Verbatim, copy-paste prompt templates for every LLM call the worker plans introduce, each with output schema, validation rules, and fail-soft behavior | Smaller AI models / developers implementing the worker plans |
 | — | [workers/](workers/README.md) | Per-worker upgrade plans (W1–W9) to make each pipeline stage market-competitive and standalone-product-grade, each with its own testing checklist | Developers, after the base plan (Stage 5 of the timeline) |
 

@@ -1,8 +1,8 @@
 # 💡 Stratos — LLM-Based Idea Research & Analysis Platform
 
-Stratos is an **agentic AI platform** designed to help users turn **vague ideas into clear, validated, and actionable product insights**.
+Stratos is a **reasoning instrument**: an agentic AI platform that turns a **vague idea into a defensible decision** by building the case for it, the case against it, and showing the weighing.
 
-It bridges the gap between **brainstorming** and **real execution** by guiding users through structured thinking, research, and market validation — something general-purpose AI tools don’t do well.
+It bridges the gap between **brainstorming** and **real execution** by interviewing the user, researching the live web **for and against** the idea, and delivering a cited, two-sided brief that ends in a weighed verdict — something neither validators, research assistants, nor general-purpose AI tools do.
 
 ---
 
@@ -59,31 +59,30 @@ Anyone who wants to **explore, validate, and refine ideas** but lacks structured
 
 ## 🧩 What Makes Stratos Different?
 
-Unlike existing tools:
+Existing tools each miss half the job:
 
-* **ChatGPT / Gemini / Perplexity**
-  → General-purpose, shallow, no guided reasoning
+* **AI validators** (ValidatorAI, Preuve, DimeADozen, …)
+  → A verdict without accountable reasoning: one-shot input, black-box scores, one-sided output
 
-* **Anara**
-  → Research-paper comparison focused
+* **Deep research** (ChatGPT / Gemini / Perplexity)
+  → Evidence without a judgment — and one-sided synthesis that decorates a conclusion reached early
 
-* **Klue / Crayon**
-  → Heavy on financial and competitor intelligence
+* **Business planning tools**
+  → Assume the idea is already validated
 
-**Stratos sits in between**:
+**Stratos closes the loop with three commitments no tool in either category makes:**
 
-* Brainstorming tools
-* Research assistants
-* Market intelligence platforms
-* Product strategy & design thinking frameworks
+1. **Every piece of evidence carries a stance** — supports, contradicts, or complicates the idea — and the research deliberately hunts for the counter-case, not just confirmation.
+2. **The verdict shows its weighing** — written like a judge's opinion ("demand outweighs competition risk *because* X; this flips if Y"), so you can disagree at a specific step instead of accepting or ignoring a score.
+3. **It states its unknowns** — a first-class section for what the research could *not* find out, instead of confident filler.
 
-It doesn’t just respond — **it guides**.
+The closest analogy isn't another AI tool — it's a **legal brief** or an **intelligence assessment**. It doesn't just respond — **it argues both sides, in the open**.
 
 ---
 
 ## ⭐ What This Product Actually Is
 
-> **An agentic AI companion that guides a user from a vague idea → clarified problem → grounded research → competitor scan → market validation → actionable product insight.**
+> **An agentic AI companion that guides a user from a vague idea → clarified thesis → two-sided evidence gathering (for *and* against) → competitor & trend scan → weighed verdict with stated unknowns → a decision they can defend.**
 
 Key characteristics:
 
@@ -102,9 +101,11 @@ It’s structured thinking, research, and validation — combined.
 
 * Idea clarification through guided questioning
 * Structured problem & persona definition
-* Market and trend research synthesis
+* Two-sided market and trend research (dedicated counter-evidence pass, stance-tagged sources)
 * Competitor discovery and analysis
-* Evidence-backed insight generation
+* Evidence-backed insight generation with archived source snippets per claim
+* A weighed Go / Pivot / No-Go verdict that cites its evidence and names its strongest counter-argument
+* An honest "Unknowns" section for what the research couldn't answer
 * Deep-dive follow-up questioning on generated reports
 * Exportable structured outputs (PDF / HTML)
 

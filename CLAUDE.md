@@ -30,7 +30,7 @@ python -m pytest tests -q              # run all backend tests
 python -m pytest tests/test_section_writer_service.py -q   # single test file
 ```
 
-Requires local Postgres (`localhost:5432`, db `stratos`) and Redis (`localhost:6379`) running first, plus a `stratos-backend/.env` — see [SETUP.md](SETUP.md) for the full first-time setup including required env vars and the 4 AstraDB collections (`embeddings` vector-enabled 384-dim/cosine, `evidence`, `trend_items`, `competitor_insights`).
+Requires local Postgres (`localhost:5432`, db `stratos`) and Redis (`localhost:6379`) running first, plus a `stratos-backend/.env` — see [SETUP.md](SETUP.md) for the full first-time setup including required env vars and the 5 AstraDB collections (`evidence`, `trend_items`, `competitor_insights`, `evidence_bundles` — provisioned by `scripts/create_astra_collections.py` — and `embeddings`, vector-enabled via server-side `$vectorize` on `nvidia`/`NV-Embed-QA`, 1024-dim/cosine, provisioned by `scripts/ensure_astra_collections.py`).
 
 ### Frontend (`stratos-frontend/`)
 

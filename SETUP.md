@@ -147,76 +147,49 @@ PRODUCT_HUNT_TOKEN=<your_product_hunt_developer_token>
 
 ## 4) Astra DB Collection Setup (First Time)
 
-Create these 4 collections in Astra DB Data Explorer (same keyspace for all, recommended keyspace: `stratos`).
+Run the two provisioning scripts against your Astra DB — **do not create
+collections by hand in the Astra UI**. This section used to instruct manual
+creation of 4 collections and omitted a 5th (`evidence_bundles`); that's
+exactly how a real environment ended up missing it while running for weeks.
+The scripts are the single source of truth for what collections must exist
+and how, so they can't drift from this doc again.
 
-| Collection | Type | Purpose |
-| --- | --- | --- |
-| `embeddings` | Vector-enabled | RAG / semantic search |
-| `evidence` | Standard collection | Raw scraped evidence |
-| `trend_items` | Standard collection | News / papers / social trends |
-| `competitor_insights` | Standard collection | Competitor analysis |
-
-### Most important rule
-
-Only `embeddings` should be vector-enabled.
-
-### Create `embeddings` (vector-enabled)
-
-Use these exact settings:
-
-- Collection Name: `embeddings`
-- Vector-enabled collection: `ON`
-- Embedding generation method: `Bring my own embeddings`
-- Dimensions: `384`
-- Similarity metric: `Cosine`
-
-Do not choose automatic/provider-generated embeddings here if you plan to generate vectors in your own backend embedding worker.
-
-### Create `evidence` (standard)
-
-- Collection Name: `evidence`
-- Vector-enabled collection: `OFF`
-
-### Create `trend_items` (standard)
-
-- Collection Name: `trend_items`
-- Vector-enabled collection: `OFF`
-
-### Create `competitor_insights` (standard)
-
-- Collection Name: `competitor_insights`
-- Vector-enabled collection: `OFF`
-
-### Why this setup
-
-- `embeddings` handles vector retrieval.
-- `evidence` stores ground-truth scraped content.
-- `trend_items` stores trend intelligence.
-- `competitor_insights` stores structured competitor memory.
-
-### Embedding model recommendation (for backend worker)
-
-Recommended lightweight model:
-
-```text
-sentence-transformers/all-MiniLM-L6-v2
+```powershell
+cd stratos-backend
+.\venv\Scripts\Activate.ps1
+python scripts\create_astra_collections.py    # the 4 plain document collections
+python scripts\ensure_astra_collections.py    # the 1 vector collection (embeddings)
 ```
 
-This model outputs 384-dimensional vectors, so Astra dimensions must be `384`.
+Both are idempotent — safe to re-run any time, including against a database
+that already has some or all of the collections.
 
-If needed later, install:
+| Collection | Type | Purpose | Created by |
+| --- | --- | --- | --- |
+| `evidence` | Standard | Per-source archive: raw scraped page text + metadata | `create_astra_collections.py` |
+| `trend_items` | Standard | News / papers / social trend items | `create_astra_collections.py` |
+| `competitor_insights` | Standard | Structured, profiled competitor memory | `create_astra_collections.py` |
+| `evidence_bundles` | Standard | Per-section pre-ranked evidence cache | `create_astra_collections.py` |
+| `embeddings` | **Vector** (server-side `$vectorize`, provider `nvidia`, model `NV-Embed-QA`, 1024-dim, cosine) | Chunked, vectorized evidence for hybrid (lexical + semantic) ranking | `ensure_astra_collections.py` |
 
-```text
-sentence-transformers
-torch
+Only `embeddings` is vector-enabled, and its config is fixed by the model
+Astra calls server-side — there is no dimension/metric to choose manually,
+and no local embedding model to install (no `sentence-transformers`, no
+`torch`). See `app/services/embedding_service.py` for why this provider was
+picked.
+
+### Verify
+
+```powershell
+python -c "from astrapy import DataAPIClient; from app.config import settings; c=DataAPIClient(settings.ASTRA_DB_APPLICATION_TOKEN); kw={'keyspace': settings.ASTRA_DB_KEYSPACE} if settings.ASTRA_DB_KEYSPACE else {}; db=c.get_database_by_api_endpoint(settings.ASTRA_DB_ENDPOINT, **kw); print(sorted(x.name for x in db.list_collections()))"
 ```
+Expect all 5 names listed above.
 
 ### Astra setup checklist
 
-- [ ] `embeddings` created (vector-enabled, 384 dims, cosine)
-- [ ] `evidence` created (standard)
-- [ ] `trend_items` created (standard)
-- [ ] `competitor_insights` created (standard)
+- [ ] `create_astra_collections.py` run — `evidence`, `trend_items`, `competitor_insights`, `evidence_bundles` all report created or already-exists
+- [ ] `ensure_astra_collections.py` run — `embeddings` reports created or already-configured for `nvidia`/`NV-Embed-QA`
+- [ ] Verify script above lists all 5 collections
 
 ## 5) Start Infrastructure
 
