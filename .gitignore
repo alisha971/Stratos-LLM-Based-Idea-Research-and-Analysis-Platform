@@ -81,3 +81,6 @@ celerybeat.pid
 
 # Personal build notes â€” local only, never committed
 stratos-devlog/
+
+# Claude Code plan-mode artifacts — local only
+.claude/plans/
