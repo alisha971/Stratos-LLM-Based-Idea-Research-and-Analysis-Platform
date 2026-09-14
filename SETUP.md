@@ -30,8 +30,8 @@ pip install -r requirements.txt
 Create a `.env` file in `stratos-backend` and set at least:
 
 - `DATABASE_URL`
-- `GROQ_API_KEY_1`
-- `GROQ_API_KEY_2`
+- `GROQ_API_KEY_ALISHA`
+- `GROQ_API_KEY_ENCRIL`
 - `SERP_API_KEY`
 - `ASTRA_DB_API_ENDPOINT`
 - `ASTRA_DB_APPLICATION_TOKEN`
@@ -55,21 +55,17 @@ Use this mapping when setting up on a fresh machine:
     - Create a DB named `stratos`
     - Use your local postgres username/password
     - Format: `postgresql://<user>:<password>@localhost:5432/stratos`
-- `GROQ_API_KEY_1` / `GROQ_API_KEY_2`
+- `GROQ_API_KEY_ALISHA` / `GROQ_API_KEY_ENCRIL`
   - Source: Groq Console API keys — two separate keys/accounts
   - What it's for: `app/llm/client.py` routes each LLM call to one key as
     primary and falls back to the other on failure (rate limit, API error),
-    roughly doubling the effective daily token quota. Both keys use the same
-    model (`openai/gpt-oss-20b`).
+    roughly doubling the effective daily token quota. See
+    `app/llm/routing.py` for which key/model pair each task uses.
   - How to set:
     - Sign in to [https://console.groq.com](https://console.groq.com) with
       each account
     - Create an API key in each
-    - Paste them as `GROQ_API_KEY_1=...` and `GROQ_API_KEY_2=...`
-  - Note: the code currently still reads these as `GROQ_API_KEY_ALISHA` /
-    `GROQ_API_KEY_ENCRIL` (`app/config.py`, `app/llm/client_groq.py`); a rename
-    to `_1`/`_2` is pending. Until then, use the `_ALISHA`/`_ENCRIL` names in
-    your local `.env`.
+    - Paste them as `GROQ_API_KEY_ALISHA=...` and `GROQ_API_KEY_ENCRIL=...`
 - `SERP_API_KEY`
   - Source: SerpAPI account dashboard
   - How to set:
@@ -126,8 +122,8 @@ Create `stratos-backend/.env` like this and replace values:
 ```env
 DATABASE_URL=postgresql://postgres:<password>@localhost:5432/stratos
 
-GROQ_API_KEY_1=<your_groq_api_key_1>
-GROQ_API_KEY_2=<your_groq_api_key_2>
+GROQ_API_KEY_ALISHA=<your_groq_api_key_1>
+GROQ_API_KEY_ENCRIL=<your_groq_api_key_2>
 SERP_API_KEY=<your_serpapi_key>
 
 ASTRA_DB_API_ENDPOINT=<your_astra_api_endpoint>
@@ -291,10 +287,20 @@ From `stratos-backend`:
 
 ```powershell
 & "..\venv\Scripts\Activate.ps1"
-celery -A app.workers.celery_app worker --loglevel=info --pool=solo
+celery -A app.workers.celery_app worker --loglevel=info --pool=threads --concurrency=8 -Q celery,heavy_llm
 ```
 
-Note: `--pool=solo` is recommended on Windows.
+Note: `--pool=threads` (2026-09-14 remediation Phase 4.1, replacing the
+earlier `--pool=solo` recommendation) works identically on Windows, Linux,
+and macOS -- unlike `--pool=prefork` (Celery's own default), which needs
+`os.fork()` and is unavailable on Windows. `--pool=solo` was a
+single-threaded Windows workaround; this pipeline's fan-out (research/
+trend/competitor running in parallel, all 7 sections dispatched as
+separate tasks) was always written to run concurrently, `--pool=solo`
+just serialized it back down to one task at a time regardless of platform.
+`-Q celery,heavy_llm` listens on both queues -- section_writer/verdict/
+outline route to `heavy_llm` (Phase 3.3.g), and omitting either queue name
+means tasks routed to it are enqueued but never picked up by this worker.
 
 On startup, look for `app.workers.competitor_worker.run_competitor` (and the
 other pipeline stages) in Celery's registered-tasks banner to confirm every

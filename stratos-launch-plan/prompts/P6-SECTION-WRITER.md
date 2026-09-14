@@ -2,6 +2,10 @@
 
 Implements plan tasks W6-S1 (style card + per-type addenda), W6-S2 (claim auditor), W6-S4 (thin-evidence mode). The existing `SECTION_WRITER_PROMPT` and its JSON chunk/citation contract stay — these compose with it.
 
+**Fix-audit note (structured chunk output):** `SECTION_WRITER_PROMPT` in `app/llm/prompts.py` was updated ahead of `STYLE_CARD` below being wired in, to fix a PDF-export bug (the exporter was flattening markdown to escaped text instead of rendering it — now fixed by `app/services/markdown_pdf.py`). The deployed prompt now tells the model each chunk's `text` is markdown and to pick whichever structure fits — a table for comparing named things, a list for enumerable findings, bold lead-ins, prose for argument — instead of "each chunk should be a coherent paragraph." `STYLE_CARD`'s own bullet-list line below has been updated to explicitly allow tables too, so the two stay consistent once S6 is actually wired up.
+
+**Fix-audit note (2026-09-14 remediation, table-citation placement):** the live E2E run found the model occasionally interpreting the citation-placement rule as "add a new cell for it" — a data row with more cells than the header, which makes `mistune` reject the entire table and fall back to a plain paragraph with literal pipe syntax (not a crash, but visibly worse than a real table). `SECTION_WRITER_PROMPT`'s citation-placement rule now has an explicit added line: a citation marker in a table must be appended inside an existing cell's text, and a data row must never have more cells than the header row.
+
 ---
 
 ## 1. `STYLE_CARD` (task S6 — appended to every section prompt)
@@ -12,7 +16,7 @@ STYLE RULES (mandatory):
 - US spelling. Plain professional register — write like a good analyst, not a marketer.
 - Banned words/phrases: "game-changer", "revolutionary", "cutting-edge", "in today's fast-paced world", "delve", "unlock", "leverage" (as a verb), "seamless", "robust" (unless quoting a source).
 - Numbers: always state the year a figure refers to. Mark estimates as estimates.
-- Short paragraphs (2-4 sentences). No bullet lists unless the content is genuinely enumerable.
+- Short paragraphs (2-4 sentences) by default. Use a bulleted/numbered list when the content is genuinely enumerable, and a markdown table when comparing several named things (products, competitors, segments) on shared attributes -- don't force a comparison into prose.
 ```
 
 ## 2. `SECTION_TYPE_ADDENDA` (task S1 — a dict in code; the matching addendum is appended to the base prompt)
