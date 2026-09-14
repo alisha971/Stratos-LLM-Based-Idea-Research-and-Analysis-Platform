@@ -8,6 +8,25 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Fix-audit Part 4: substrings NVIDIA/Astra's $vectorize error carries when
+# an insert is rejected for exceeding the embedding model's token limit
+# (observed: "Input length 513 exceeds maximum allowed token size 512").
+# Matched against str(exc) rather than a specific SDK exception class/
+# attribute, since that's robust to astrapy version differences and to
+# whether the error body is even valid JSON.
+_TOKEN_LIMIT_MARKERS = ("exceeds maximum allowed token size", "maximum context length")
+
+
+class EmbeddingTooLargeError(Exception):
+    """Raised by save_embedding_chunk specifically when the embedding
+    provider rejects an insert for exceeding its token limit. Every OTHER
+    failure mode (network, auth, Astra down, collection missing) is still
+    swallowed and returns None, per this repository's fail-soft contract --
+    this one exception exists only so a caller that can do something about
+    it (EmbeddingService.save_chunk: shrink the text and retry once) has a
+    way to tell the two apart. Callers that don't care can ignore it
+    entirely and the insert still just quietly didn't happen."""
+
 
 class AstraEvidenceRepository:
     """
@@ -149,6 +168,12 @@ class AstraEvidenceRepository:
     # scripts/ensure_astra_collections.py for how it gets created.
     # --------------------------------------------------
     def save_embedding_chunk(self, document: dict[str, Any]) -> str | None:
+        """Returns the chunk id, or None on any failure/if disabled.
+
+        Raises `EmbeddingTooLargeError` specifically when the provider
+        rejected the insert for exceeding its token limit -- every other
+        failure is still swallowed here per the fail-soft contract above.
+        """
         if not self.enabled:
             return None
 
@@ -156,9 +181,55 @@ class AstraEvidenceRepository:
         try:
             self._collection("embeddings").insert_one(dict(document))
             return chunk_id
-        except Exception:
+        except Exception as exc:
+            message = str(exc).lower()
+            if any(marker in message for marker in _TOKEN_LIMIT_MARKERS):
+                raise EmbeddingTooLargeError(str(exc)) from exc
             logger.exception("[ASTRA] Failed to save embedding chunk")
             return None
+
+    def save_embedding_chunks_batch(
+        self, documents: list[dict[str, Any]]
+    ) -> tuple[set[str], Exception | None]:
+        """2026-09-14 remediation Phase 4.3: batched insert -- one
+        round-trip for the common case where every document succeeds,
+        instead of EmbeddingService.save_chunks' old per-chunk insert_one
+        loop (the audited E2E run's own §5 found 35 serial embedding
+        writes in one research pass alone).
+
+        `ordered=False` (astrapy's own default) so one bad document in
+        the batch doesn't block the rest from being attempted.
+
+        Returns (successfully_inserted_ids, error_or_none). Deliberately
+        does NOT attempt per-document EmbeddingTooLargeError detection
+        here -- astrapy's CollectionInsertManyException exposes a pooled
+        set of underlying exceptions, not a clean per-document mapping.
+        Instead: the caller (EmbeddingService.save_chunks) falls back to
+        the proven single-document save_embedding_chunk path -- which DOES
+        do that detection, plus the halve-and-retry -- for whatever isn't
+        in `successfully_inserted_ids`. This never regresses correctness
+        versus the old per-document loop; it only removes the round-trips
+        for the common fully-successful case."""
+        if not self.enabled or not documents:
+            return set(), None
+
+        try:
+            result = self._collection("embeddings").insert_many(documents, ordered=False)
+            return set(result.inserted_ids), None
+        except Exception as exc:
+            # astrapy's CollectionInsertManyException carries inserted_ids
+            # for the documents that DID succeed before/around the
+            # failure(s); a connection-level exception won't have this
+            # attribute at all, hence the getattr default.
+            inserted = set(getattr(exc, "inserted_ids", None) or [])
+            logger.warning(
+                "[ASTRA] Batch embedding insert partial/full failure "
+                "(%d/%d succeeded): %s",
+                len(inserted),
+                len(documents),
+                exc,
+            )
+            return inserted, exc
 
     def find_similar_embeddings(
         self,
@@ -189,15 +260,29 @@ class AstraEvidenceRepository:
             )
             return []
 
-    def list_evidence_chunks(self, report_id: str, limit: int = 500) -> list[dict[str, Any]]:
-        """Plain (non-vector) lexical read of the `embeddings` collection,
-        filtered to web-scraped evidence chunks only. "web_chunk" must
-        match EmbeddingService.CONTENT_TYPE_WEB_CHUNK -- kept as a literal
-        here rather than importing that module, since embedding_service.py
-        already imports this one and this repository intentionally stays
-        the lower layer. trend_item/competitor_profile chunks live in the
-        same physical collection but are out of scope here; they have
-        their own read paths (fetch_trend_items/fetch_competitor_insights).
+    def list_evidence_chunks(
+        self,
+        report_id: str,
+        limit: int = 500,
+        content_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Plain (non-vector) lexical read of the `embeddings` collection.
+
+        `content_types` defaults to `["web_chunk"]` for backwards
+        compatibility with existing callers. "web_chunk"/"trend_item"/
+        "competitor_profile" must match
+        EmbeddingService.CONTENT_TYPE_WEB_CHUNK/CONTENT_TYPE_TREND_ITEM/
+        CONTENT_TYPE_COMPETITOR_PROFILE -- kept as literals here rather than
+        importing that module, since embedding_service.py already imports
+        this one and this repository intentionally stays the lower layer.
+
+        2026-09-14 remediation Phase 1.1: EvidenceBundleService._load_evidence_items
+        (the only feed into generate_bundles_for_report) now passes all three
+        content types, so competitor/trend chunks are no longer structurally
+        excluded from the lexical half of bundle ranking -- previously they
+        could only enter a bundle by winning unfiltered vector search.
+        fetch_trend_items/fetch_competitor_insights remain separate read
+        paths for callers that want ONLY one type.
 
         No vector sort -- this is the lexical corpus for EvidenceRanker,
         not semantic search (see find_similar_embeddings for that). This
@@ -209,9 +294,11 @@ class AstraEvidenceRepository:
         if not self.enabled:
             return []
 
+        types = content_types if content_types is not None else ["web_chunk"]
+
         try:
             cursor = self._collection("embeddings").find(
-                {"report_id": report_id, "content_type": "web_chunk"},
+                {"report_id": report_id, "content_type": {"$in": types}},
                 limit=limit,
             )
             return [dict(item) for item in cursor]
@@ -222,7 +309,14 @@ class AstraEvidenceRepository:
             )
             return []
 
-    def fetch_evidence(self, report_id: str, section_title: str) -> list[dict[str, Any]]:
+    def fetch_evidence(
+        self,
+        report_id: str,
+        section_title: str,
+        content_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """`content_types` passes through to list_evidence_chunks (default
+        ["web_chunk"] when None) -- see Phase 1.1 note there."""
         bundle = self.get_evidence_bundle(
             report_id=report_id,
             section_title=section_title,
@@ -230,7 +324,7 @@ class AstraEvidenceRepository:
         if bundle and isinstance(bundle.get("items"), list):
             return list(bundle["items"])
 
-        chunks = self.list_evidence_chunks(report_id)
+        chunks = self.list_evidence_chunks(report_id, content_types=content_types)
         if chunks:
             return chunks
 

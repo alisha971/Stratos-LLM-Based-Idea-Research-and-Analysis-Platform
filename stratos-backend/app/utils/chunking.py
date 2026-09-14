@@ -16,10 +16,20 @@ from __future__ import annotations
 
 import re
 
-# 400-600 chars sits well inside any modern retrieval embedding model's
-# context window with headroom (see stratos-launch-plan Stage 2b) -- the
-# exact ceiling for whichever model is in use isn't something this module
-# needs to know, since it's already conservative under any plausible one.
+# 400-600 chars was assumed to sit well inside any modern retrieval
+# embedding model's context window (see stratos-launch-plan Stage 2b), on
+# the premise that this module doesn't need to know the exact per-model
+# token ceiling since it's already conservative under any plausible one.
+# Fix-audit Part 4: that premise doesn't hold -- this budget is CHARACTERS
+# while NV-Embed-QA's limit is 512 TOKENS, and on token-dense text (URLs,
+# slugs, numbers, punctuation -- exactly what boilerplate-heavy scraped
+# pages are full of) a 500-char chunk can still overflow it. This module
+# still doesn't need to know the exact ceiling, but the two bugs that made
+# an emitted chunk exceed even ITS OWN budget are fixed below (an oversized
+# single "word" is now hard-split instead of emitted whole, and the pack
+# loop re-checks actual joined length instead of an incremental estimate);
+# EMBEDDING_MAX_CHARS in embedding_service.py is the actual hard backstop
+# against the token limit, independent of this budget.
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_OVERLAP_RATIO = 0.12
 
@@ -57,8 +67,15 @@ def chunk_text(
 def _split_into_units(text: str, chunk_size: int) -> list[str]:
     """Break text into pieces no larger than chunk_size, preferring the
     largest structural boundary that fits: paragraph -> sentence -> word.
-    A single oversized "word" (e.g. a URL) is returned whole rather than
-    cut, since splitting mid-token is worse than one slightly-long chunk.
+
+    Fix-audit Part 4: a single oversized "word" (a URL, a base64 blob, a
+    concatenated nav string with no spaces) used to be returned whole,
+    which is exactly the kind of token-dense text that overflows an
+    embedding model's token limit at a fraction of chunk_size's character
+    budget. There's no natural boundary inside it anyway, so it is now
+    hard-split on character count -- no worse than the token-dense text
+    already is, and every OTHER unit returned by this function is still
+    cut only at a word boundary.
     """
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT.split(text) if p.strip()]
     units: list[str] = []
@@ -77,11 +94,22 @@ def _split_into_units(text: str, chunk_size: int) -> list[str]:
 
             # Sentence itself is too long (rare: no punctuation, a long
             # run-on) -- fall back to word-level packing so we still never
-            # split mid-word.
+            # split mid-word, except for a single word that is itself
+            # over budget (see docstring).
             words = sentence.split()
             buf: list[str] = []
             buf_len = 0
             for word in words:
+                if len(word) > chunk_size:
+                    if buf:
+                        units.append(" ".join(buf))
+                        buf, buf_len = [], 0
+                    units.extend(
+                        word[start : start + chunk_size]
+                        for start in range(0, len(word), chunk_size)
+                    )
+                    continue
+
                 add_len = len(word) + (1 if buf else 0)
                 if buf and buf_len + add_len > chunk_size:
                     units.append(" ".join(buf))
@@ -95,33 +123,45 @@ def _split_into_units(text: str, chunk_size: int) -> list[str]:
     return units
 
 
+def _joined_len(parts: list[str]) -> int:
+    return sum(len(p) for p in parts) + max(len(parts) - 1, 0)
+
+
 def _pack_units(units: list[str], *, chunk_size: int, overlap: int) -> list[str]:
     """Greedily pack the smaller structural units (paragraphs/sentences/word
     groups) back up toward chunk_size, so a chunk isn't just "one sentence"
     when several short sentences would fit together -- then carries the tail
-    of each chunk into the next as overlap."""
+    of each chunk into the next as overlap.
+
+    Fix-audit Part 4: re-checks the ACTUAL joined length before adding a
+    unit (not an incrementally-tracked estimate -- the previous version's
+    bookkeeping could drift, and its own comment admitted as much without
+    actually correcting for it), both before AND after seeding the overlap
+    carry, so an emitted chunk can no longer exceed chunk_size. Previously
+    the carry -- built from whole units, itself up to `overlap` chars --
+    was appended to unconditionally, letting a chunk reach roughly 2x
+    chunk_size before the next boundary check fired.
+    """
     if not units:
         return []
 
     chunks: list[str] = []
     current: list[str] = []
-    current_len = 0
 
     for unit in units:
-        add_len = len(unit) + (1 if current else 0)
-        if current and current_len + add_len > chunk_size:
+        if current and _joined_len(current) + 1 + len(unit) > chunk_size:
             chunks.append(" ".join(current))
-            carry = _tail_for_overlap(current, overlap)
-            current = list(carry)
-            current_len = sum(len(u) for u in current) + max(len(current) - 1, 0)
+            current = _tail_for_overlap(current, overlap)
+            if current and _joined_len(current) + 1 + len(unit) > chunk_size:
+                # The overlap carry alone already leaves no room -- flush
+                # it standalone rather than stacking the next unit on top.
+                chunks.append(" ".join(current))
+                current = []
         current.append(unit)
-        current_len += add_len if current_len == 0 else len(unit) + 1
 
     if current:
         chunks.append(" ".join(current))
 
-    # Recompute cleanly if the incremental length bookkeeping above drifted
-    # (it's an estimate for packing decisions, not the source of truth).
     return chunks
 
 

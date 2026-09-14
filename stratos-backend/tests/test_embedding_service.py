@@ -8,13 +8,16 @@ stratos-launch-plan Stage 2b."""
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import ANY, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.services.astra_evidence_repository import EmbeddingTooLargeError
 from app.services.embedding_service import (
     CONTENT_TYPE_COMPETITOR_PROFILE,
     CONTENT_TYPE_TREND_ITEM,
     CONTENT_TYPE_WEB_CHUNK,
+    EMBEDDING_MAX_CHARS,
     EmbeddingService,
 )
 
@@ -22,20 +25,50 @@ from app.services.embedding_service import (
 class FakeAstraRepository:
     """Records every call, never touches the network. Mirrors the
     fail-soft contract of the real AstraEvidenceRepository: save returns
-    None when `enabled` is False, find returns []."""
+    None when `enabled` is False, find returns [].
 
-    def __init__(self, enabled: bool = True, fail_saves: bool = False):
+    `fail_mode`: "none" (default success), "generic" (returns None, like a
+    swallowed network/auth error), or "too_large" (raises
+    EmbeddingTooLargeError -- optionally only on the Nth call via
+    `too_large_calls`, to simulate the halve-and-retry succeeding on the
+    second attempt)."""
+
+    def __init__(self, enabled: bool = True, fail_mode: str = "none", too_large_calls: int = 10**9):
         self.enabled = enabled
-        self.fail_saves = fail_saves
+        self.fail_mode = fail_mode
+        self.too_large_calls = too_large_calls
         self.saved_documents: list[dict] = []
         self.search_calls: list[dict] = []
         self.search_results: list[dict] = []
+        self.call_count = 0
 
     def save_embedding_chunk(self, document: dict):
-        if not self.enabled or self.fail_saves:
+        self.call_count += 1
+        if not self.enabled:
             return None
+        if self.fail_mode == "generic":
+            return None
+        if self.fail_mode == "too_large" and self.call_count <= self.too_large_calls:
+            raise EmbeddingTooLargeError("Input length 999 exceeds maximum allowed token size 512")
         self.saved_documents.append(document)
         return document["_id"]
+
+    def save_embedding_chunks_batch(self, documents: list[dict]):
+        """2026-09-14 remediation Phase 4.3. Mirrors the real
+        AstraEvidenceRepository.save_embedding_chunks_batch contract:
+        (successfully_inserted_ids, error_or_none). Any fail_mode other
+        than "none" (or `enabled=False`) simulates the WHOLE batch call
+        failing outright -- (set(), None) -- so save_chunks' fallback to
+        the per-document save_embedding_chunk path (where the existing
+        "generic"/"too_large" simulations already live, and are already
+        covered by SaveChunkTests) is what actually gets exercised,
+        exactly as it would be against the real API on a batch-level
+        failure."""
+        self.call_count += 1
+        if not self.enabled or self.fail_mode != "none":
+            return set(), None
+        self.saved_documents.extend(documents)
+        return {d["_id"] for d in documents}, None
 
     def find_similar_embeddings(self, report_id, query_text, limit=25):
         self.search_calls.append(
@@ -102,6 +135,109 @@ class SaveChunkTests(unittest.TestCase):
         self.assertEqual(repo.saved_documents[0]["stance"], "challenges")
 
 
+class TruncationAndDegradationTests(unittest.TestCase):
+    """Fix-audit Part 4: save_chunk is the single choke point every
+    $vectorize write goes through (directly or via save_chunks), so its
+    truncation guard and degradation recording cover all four call sites
+    (web chunks, news snippets, trend items, competitor profiles) at once."""
+
+    def test_oversized_text_is_truncated_before_reaching_vectorize(self):
+        repo = FakeAstraRepository()
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(
+            report_id="r1",
+            content_type=CONTENT_TYPE_TREND_ITEM,
+            text="word " * 400,  # 2000 chars, well over EMBEDDING_MAX_CHARS
+        )
+
+        saved_text = repo.saved_documents[0]["text"]
+        self.assertLessEqual(len(saved_text), EMBEDDING_MAX_CHARS)
+        self.assertEqual(repo.saved_documents[0]["$vectorize"], saved_text)
+
+    def test_short_text_is_untouched(self):
+        repo = FakeAstraRepository()
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(
+            report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="a short chunk"
+        )
+        self.assertEqual(repo.saved_documents[0]["text"], "a short chunk")
+
+    def test_truncation_prefers_a_word_boundary(self):
+        repo = FakeAstraRepository()
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(
+            report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="word " * 400
+        )
+        saved_text = repo.saved_documents[0]["text"]
+        self.assertFalse(saved_text.endswith("wor"))  # not a mid-word cut
+
+    def test_too_large_error_halves_and_retries_once_and_succeeds(self):
+        # First attempt raises EmbeddingTooLargeError, second (halved)
+        # attempt succeeds -- the chunk is saved, not dropped.
+        repo = FakeAstraRepository(fail_mode="too_large", too_large_calls=1)
+        service = EmbeddingService(astra_repository=repo)
+
+        chunk_id = service.save_chunk(
+            report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="word " * 100
+        )
+
+        self.assertIsNotNone(chunk_id)
+        self.assertEqual(repo.call_count, 2)
+        self.assertEqual(len(repo.saved_documents), 1)
+
+    @patch("app.services.embedding_service.record_degradation")
+    def test_too_large_error_persisting_after_halving_drops_and_records(self, mock_degraded):
+        # Both attempts raise EmbeddingTooLargeError -- exactly one retry,
+        # then give up (fail-soft, not fatal) and record the degradation.
+        repo = FakeAstraRepository(fail_mode="too_large")  # always raises
+        service = EmbeddingService(astra_repository=repo)
+
+        chunk_id = service.save_chunk(
+            report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="word " * 100
+        )
+
+        self.assertIsNone(chunk_id)
+        self.assertEqual(repo.call_count, 2)  # exactly one retry, not a loop
+        self.assertEqual(repo.saved_documents, [])
+        mock_degraded.assert_called_once()
+        args, _ = mock_degraded.call_args
+        self.assertEqual(args[0], "r1")
+        self.assertEqual(args[1], "embedding_chunk_save")
+
+    @patch("app.services.embedding_service.record_degradation")
+    def test_generic_failure_records_degradation(self, mock_degraded):
+        repo = FakeAstraRepository(fail_mode="generic")
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="x")
+
+        mock_degraded.assert_called_once_with("r1", "embedding_chunk_save", ANY)
+
+    @patch("app.services.embedding_service.record_degradation")
+    def test_disabled_repository_does_not_record_degradation(self, mock_degraded):
+        # Disabled (no Astra credentials configured) is a config fact, not
+        # a degradation -- must not spam the tally in an environment that
+        # simply doesn't have Astra set up.
+        repo = FakeAstraRepository(enabled=False)
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="x")
+
+        mock_degraded.assert_not_called()
+
+    @patch("app.services.embedding_service.record_degradation")
+    def test_successful_save_does_not_record_degradation(self, mock_degraded):
+        repo = FakeAstraRepository()
+        service = EmbeddingService(astra_repository=repo)
+
+        service.save_chunk(report_id="r1", content_type=CONTENT_TYPE_WEB_CHUNK, text="x")
+
+        mock_degraded.assert_not_called()
+
+
 class SaveChunksBatchTests(unittest.TestCase):
     def test_batch_shape_indexes_in_order(self):
         repo = FakeAstraRepository()
@@ -121,8 +257,9 @@ class SaveChunksBatchTests(unittest.TestCase):
             ["first chunk text", "second chunk text", "third chunk text"],
         )
 
-    def test_partial_failure_is_not_fatal(self):
-        repo = FakeAstraRepository(fail_saves=True)
+    @patch("app.services.embedding_service.record_degradation")
+    def test_partial_failure_is_not_fatal(self, mock_degraded):
+        repo = FakeAstraRepository(fail_mode="generic")
         service = EmbeddingService(astra_repository=repo)
 
         saved_count = service.save_chunks(
@@ -131,6 +268,8 @@ class SaveChunksBatchTests(unittest.TestCase):
             chunks=["a", "b"],
         )
         self.assertEqual(saved_count, 0)  # degrades silently, doesn't raise
+        # Fix-audit Part 0/4: but it's still counted, once per chunk.
+        self.assertEqual(mock_degraded.call_count, 2)
 
     def test_empty_chunk_list_saves_nothing(self):
         repo = FakeAstraRepository()
@@ -152,6 +291,40 @@ class SaveChunksBatchTests(unittest.TestCase):
             stance="challenges",
         )
         self.assertTrue(all(d["stance"] == "challenges" for d in repo.saved_documents))
+
+    def test_partial_batch_failure_only_retries_the_failed_subset(self):
+        """2026-09-14 remediation Phase 4.3: when the batch call succeeds
+        for SOME documents and fails for others, only the failed ones
+        should go through the per-document fallback -- a succeeded
+        document must not be saved twice."""
+        repo = FakeAstraRepository()
+        # Simulate a genuine partial success: the batch call itself
+        # reports 2 of 3 ids succeeded, with no error object (mirrors a
+        # real CollectionInsertManyException's inserted_ids).
+        original_batch = repo.save_embedding_chunks_batch
+
+        def partial_batch(documents):
+            repo.call_count += 1
+            succeeded_docs = documents[:2]
+            repo.saved_documents.extend(succeeded_docs)
+            return {d["_id"] for d in succeeded_docs}, None
+
+        repo.save_embedding_chunks_batch = partial_batch
+        service = EmbeddingService(astra_repository=repo)
+
+        saved_count = service.save_chunks(
+            report_id="r1",
+            content_type=CONTENT_TYPE_WEB_CHUNK,
+            chunks=["first", "second", "third"],
+        )
+
+        # 2 saved by the batch call + 1 recovered via the per-document
+        # fallback for the one that didn't confirm success.
+        self.assertEqual(saved_count, 3)
+        texts_saved = [d["text"] for d in repo.saved_documents]
+        self.assertEqual(texts_saved.count("first"), 1)
+        self.assertEqual(texts_saved.count("second"), 1)
+        self.assertEqual(texts_saved.count("third"), 1)
 
 
 class FindSimilarTests(unittest.TestCase):

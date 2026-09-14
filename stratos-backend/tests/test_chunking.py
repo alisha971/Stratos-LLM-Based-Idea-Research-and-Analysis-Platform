@@ -28,11 +28,13 @@ class ChunkTextTests(unittest.TestCase):
         text = sentence * 60  # ~4080 chars
         chunks = chunk_text(text, chunk_size=500, overlap_ratio=0.12)
         self.assertGreater(len(chunks), 1)
+        # Fix-audit Part 4: previously an emitted chunk could reach roughly
+        # 2x chunk_size (the overlap carry, itself near the budget, had the
+        # next unit appended on top unconditionally). The pack loop now
+        # re-checks actual joined length at both points, so no chunk may
+        # exceed chunk_size at all -- no slack needed.
         for chunk in chunks:
-            # Allow slack for the single-oversized-unit fallback case, but
-            # ordinary packed chunks should sit near the budget, not blow
-            # past it by a wide margin.
-            self.assertLessEqual(len(chunk), 700)
+            self.assertLessEqual(len(chunk), 500)
 
     def test_paragraph_boundaries_preferred_over_mid_sentence_splits(self):
         para1 = "First paragraph. " * 10
@@ -67,6 +69,48 @@ class ChunkTextTests(unittest.TestCase):
         self.assertGreater(len(chunks), 1)
         # No chunk should be empty.
         self.assertTrue(all(c.strip() for c in chunks))
+
+    def test_oversized_single_word_is_hard_split_not_emitted_whole(self):
+        # Fix-audit Part 4: a URL/base64-style run with no spaces used to
+        # be returned whole even when far longer than chunk_size -- exactly
+        # the token-dense text that overflows an embedding model's token
+        # limit at a fraction of the character budget.
+        url = "https://example.com/" + ("a" * 900)  # one 921-char "word"
+        chunks = chunk_text(url, chunk_size=200, overlap_ratio=0.0)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 200)
+        # No content lost: the pieces reassemble back to the original.
+        self.assertEqual("".join(chunks), url)
+
+    def test_oversized_word_embedded_in_normal_prose_is_still_split(self):
+        text = (
+            "Read the pricing details here: "
+            + ("x" * 600)
+            + " and let us know what you think."
+        )
+        chunks = chunk_text(text, chunk_size=150, overlap_ratio=0.0)
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 150)
+
+    def test_no_chunk_ever_exceeds_size_budget_across_varied_inputs(self):
+        # A broader sweep than the single long-paragraph case above:
+        # multiple paragraphs, short and long sentences, and an oversized
+        # word, all in the same document.
+        text = "\n\n".join(
+            [
+                "Short intro paragraph.",
+                ("A longer paragraph with many sentences. " * 20).strip(),
+                "One sentence with a long token: " + ("z" * 550) + " right there.",
+                ("Another paragraph. " * 15).strip(),
+            ]
+        )
+        for chunk_size in (100, 250, 500):
+            chunks = chunk_text(text, chunk_size=chunk_size, overlap_ratio=0.12)
+            for chunk in chunks:
+                self.assertLessEqual(
+                    len(chunk), chunk_size, f"chunk_size={chunk_size} chunk={chunk!r}"
+                )
 
     def test_reconstructable_content_no_word_dropped(self):
         """Every word in the source appears somewhere in the chunked output
