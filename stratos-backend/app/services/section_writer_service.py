@@ -18,10 +18,26 @@ from app.utils.clarification_schema import writer_view
 TITLE_KEYWORDS = {
     "problem": {"problem", "pain", "validation", "context", "need", "workaround"},
     "persona": {"user", "users", "persona", "personas", "customer", "audience", "target"},
-    "solutions": {"solution", "solutions", "alternative", "alternatives", "existing", "workaround"},
+    # Fix-audit Part 1: widened so a genuine "Existing Solutions" section
+    # (which must name actual products to describe them) has a realistic
+    # chance of scoring on its own bucket instead of only Competitor
+    # Landscape's -- previously 6 words, half of them inflections of each
+    # other, versus Competitor Landscape's product/pricing/feature bucket
+    # that any honest write-up of existing solutions necessarily also hits.
+    "solutions": {
+        "solution", "solutions", "alternative", "alternatives", "existing",
+        "workaround", "product", "products", "tool", "tools", "platform",
+        "vendor", "incumbent", "offering", "approach",
+    },
     "competitor": {"competitor", "competitors", "landscape", "pricing", "feature", "features"},
     "trend": {"market", "industry", "trend", "trends", "news", "growth", "adoption"},
-    "opportunity": {"opportunity", "opportunities", "gap", "gaps", "differentiation", "positioning"},
+    # Key is "opportunit" (a stem), not "opportunity": the outline's actual
+    # title is "Opportunities & Gaps", and "opportunity" is NOT a substring
+    # of "opportunities" (they diverge at the 11th character), so the old
+    # key silently never matched -- this section's own vocabulary fell
+    # through to the generic 2-word {opportunities, gaps} bucket, which is
+    # too small to ever score >=3 and be picked as a drift target.
+    "opportunit": {"opportunity", "opportunities", "gap", "gaps", "differentiation", "positioning"},
     "risk": {"risk", "risks", "question", "questions", "unknown", "constraint", "constraints"},
     "technical": {"technical", "feasibility", "architecture", "integration", "implementation"},
     "regulatory": {"regulatory", "compliance", "privacy", "legal", "policy"},
@@ -160,8 +176,16 @@ class SectionWriterService:
         self,
         context: dict[str, Any],
         repair_reason: str | None = None,
+        temperature: float = 0.2,
     ) -> dict[str, Any]:
-        from app.llm.client import generate_chat
+        # 2026-09-14 remediation Phase 3: section_writer is migrated onto
+        # the scheduler-backed multi-provider dispatch (Gemini first,
+        # falling back to Groq -- see FEDERATED_ROUTES in
+        # app/llm/client_federated.py for the live-verification story
+        # behind this choice). app/llm/client.py's generate_chat (Groq-only,
+        # TASK_ROUTES-driven) is unaffected and still used by every other
+        # task -- this is the one call site actually migrated so far.
+        from app.llm.client_federated import generate_chat_federated
 
         prompt = self._build_prompt(context)
         if repair_reason:
@@ -171,9 +195,9 @@ class SectionWriterService:
                 "Regenerate the full JSON so the section is valid."
             )
 
-        raw_output = generate_chat(
+        raw_output = generate_chat_federated(
             messages=[{"role": "system", "content": prompt}],
-            temperature=0.2,
+            temperature=temperature,
             task="section_writer",
         )
         return self._parse_json(raw_output)
@@ -183,6 +207,12 @@ class SectionWriterService:
         draft: dict[str, Any],
         context: dict[str, Any],
     ) -> None:
+        """Fatal, correctness-only checks (fix-audit Part 1). Everything
+        here is provable from the draft's own structure: a section that
+        fails one of these is malformed or ungrounded, not just
+        off-topic. Topical alignment is a quality *signal*, not a
+        correctness invariant -- see `assess_section_quality`, which must
+        be called separately and never raises."""
         chunks = draft.get("chunks")
         if not isinstance(chunks, list) or not chunks:
             raise ValueError("Section draft missing chunks")
@@ -190,20 +220,6 @@ class SectionWriterService:
         alignment = draft.get("section_alignment_summary")
         if not isinstance(alignment, str) or not alignment.strip():
             raise ValueError("Section draft missing section_alignment_summary")
-
-        section_title = context["section"]["title"]
-        all_text = " ".join(
-            [alignment] + [str(chunk.get("text", "")) for chunk in chunks]
-        )
-        if not self._matches_section_title(section_title, all_text):
-            raise ValueError("Section content does not match section title")
-
-        if self._drifts_to_other_section(
-            section_title,
-            context.get("outline_titles", []),
-            all_text,
-        ):
-            raise ValueError("Section content drifts into another outline section")
 
         citation_map = context["citation_map"]
         allowed_markers = set(citation_map)
@@ -245,6 +261,40 @@ class SectionWriterService:
 
             if not text_markers.issubset(citation_markers):
                 raise ValueError("Inline citations missing from citations array")
+
+    def assess_section_quality(
+        self,
+        draft: dict[str, Any],
+        context: dict[str, Any],
+    ) -> list[str]:
+        """Non-fatal quality signals (fix-audit Part 1). Topical-alignment
+        keyword heuristics that used to be enforced as hard validators in
+        `validate_section_draft` -- a keyword-overlap heuristic is a
+        useful smell for a human (or a later automated pass) to look at,
+        but it cannot distinguish "on-topic prose that happens to share
+        vocabulary with a neighboring section" from genuine drift, so it
+        must never be able to drop a section from the shipped report.
+        Call only after `validate_section_draft` has passed; returns an
+        empty list when nothing looks off.
+        """
+        section_title = context["section"]["title"]
+        chunks = draft.get("chunks") or []
+        alignment = str(draft.get("section_alignment_summary") or "")
+        all_text = " ".join([alignment] + [str(c.get("text", "")) for c in chunks])
+
+        findings: list[str] = []
+
+        title_finding = self._title_match_finding(section_title, all_text)
+        if title_finding:
+            findings.append(title_finding)
+
+        drift_finding = self._drift_finding(
+            section_title, context.get("outline_titles", []), all_text
+        )
+        if drift_finding:
+            findings.append(drift_finding)
+
+        return findings
 
     def persist_section_chunks(
         self,
@@ -486,27 +536,61 @@ class SectionWriterService:
         if not keywords:
             return True
 
-        words = set(re.findall(r"[a-zA-Z][a-zA-Z-]+", text.lower()))
-        return bool(words.intersection(keywords))
+        return bool(self._keyword_hits(text, keywords))
 
-    def _drifts_to_other_section(
+    def _title_match_finding(self, section_title: str, text: str) -> str | None:
+        if self._matches_section_title(section_title, text):
+            return None
+        return (
+            f'Section content does not use any vocabulary associated with '
+            f'"{section_title}"'
+        )
+
+    def _drift_finding(
         self,
         section_title: str,
         outline_titles: list[str],
         text: str,
-    ) -> bool:
+    ) -> str | None:
+        """Fix-audit Part 1: adjacent business-report sections legitimately
+        share vocabulary -- an honest "Existing Solutions" section must
+        name products, features and prices, which also scores on
+        Competitor Landscape's bucket, and that overlap alone must not be
+        flagged. Only surfaces when another section's vocabulary clearly
+        dominates this one's own (at least double, and at least 3 distinct
+        hits) -- a real take-over, not ordinary overlap. Reports the
+        specific competing title and the overlapping words so the reason
+        is actionable rather than a bare "drifts" label.
+        """
         current_keywords = self._keywords_for_title(section_title)
-        current_score = self._keyword_score(text, current_keywords)
+        current_hits = self._keyword_hits(text, current_keywords)
+        current_score = len(current_hits)
 
+        best_title: str | None = None
+        best_hits: set[str] = set()
         for other_title in outline_titles:
             if other_title == section_title:
                 continue
-            other_keywords = self._keywords_for_title(other_title)
-            other_score = self._keyword_score(text, other_keywords)
-            if other_score >= 3 and other_score > current_score + 1:
-                return True
+            other_hits = self._keyword_hits(text, self._keywords_for_title(other_title))
+            if (
+                len(other_hits) >= 3
+                and len(other_hits) >= 2 * current_score
+                and len(other_hits) > len(best_hits)
+            ):
+                best_title, best_hits = other_title, other_hits
 
-        return False
+        if not best_title:
+            return None
+
+        if current_score:
+            self_desc = f"used only its own terms: {', '.join(sorted(current_hits))}"
+        else:
+            self_desc = f'used none of the vocabulary for "{section_title}"'
+
+        return (
+            f'Section content leans toward "{best_title}" '
+            f"(matched: {', '.join(sorted(best_hits))}); {self_desc}"
+        )
 
     def _keywords_for_title(self, title: str) -> set[str]:
         normalized = title.lower()
@@ -520,6 +604,9 @@ class SectionWriterService:
             if word not in STOPWORDS
         }
 
-    def _keyword_score(self, text: str, keywords: set[str]) -> int:
+    def _keyword_hits(self, text: str, keywords: set[str]) -> set[str]:
         words = set(re.findall(r"[a-zA-Z][a-zA-Z-]+", text.lower()))
-        return len(words.intersection(keywords))
+        return words & keywords
+
+    def _keyword_score(self, text: str, keywords: set[str]) -> int:
+        return len(self._keyword_hits(text, keywords))

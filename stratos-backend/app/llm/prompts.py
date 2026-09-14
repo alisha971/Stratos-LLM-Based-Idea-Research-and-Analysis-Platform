@@ -508,6 +508,85 @@ Pricing page text (may be empty if unavailable):
 {{PRICING_TEXT}}
 """
 
+# 2026-09-14 remediation Phase 2, Channel D. Copied verbatim from
+# stratos-launch-plan/prompts/P5-COMPETITOR.md §1 -- spec'd as "Channel A"
+# there and never previously built. NEVER trusted alone: a candidate found
+# ONLY by this channel is refused entry by CompetitorService's
+# corroboration gate, even if its (self-reported) URL later fetches
+# successfully -- an LLM "knowing" a company exists is not evidence.
+COMPETITOR_CANDIDATES_PROMPT = """
+List real companies that compete with this business idea. These are CANDIDATES that will be verified by fetching their websites — a wrong URL wastes a verification slot, so only include companies you are confident actually exist.
+
+CLARIFIED IDEA SUMMARY:
+<data>
+{{CLARIFIED_SUMMARY}}
+</data>
+
+Rules:
+1. Up to 10 companies. If the niche is genuinely narrow, 2–3 real ones beat 10 guesses. NEVER pad the list.
+2. Include direct competitors first, then the strongest indirect ones (what customers use INSTEAD today, even if it's a different category).
+3. "url" must be the company's main homepage (https://...). If you are not sure of the exact domain, set url to null — do not guess domains.
+4. one_liner: what they do, ≤ 12 words, factual.
+
+Return ONLY:
+{"candidates": [{"name": "...", "url": "https://... or null", "one_liner": "..."}]}
+"""
+
+# 2026-09-14 remediation Phase 2, Channel A. Copied verbatim from
+# stratos-launch-plan/prompts/P5-COMPETITOR.md §2 -- spec'd as "Channel B"
+# there and never previously built. The search results block is
+# internet-derived (SERP titles/snippets) so it is wrapped in <data> tags
+# per the security plan §6 -- it is data to extract from, not instructions.
+COMPETITOR_SERP_EXTRACTION_PROMPT = """
+Extract company/product names and their URLs from these search results about a market's competitors.
+
+SEARCH RESULTS (title, url, snippet each):
+<data>
+{{SEARCH_RESULTS_JSON}}
+</data>
+
+Rules:
+1. Extract only companies/products that the results present as PLAYERS IN THIS MARKET (not the publishers of the articles — "TechCrunch" is a publisher, not a competitor).
+2. URL: use the company's own domain if it appears; otherwise null (never use the article's URL as the company URL).
+3. Listicle titles like "Top 10 X tools" — extract the tool names from the snippet if present.
+4. Maximum 15 extractions. Skip anything ambiguous.
+
+Return ONLY:
+{"companies": [{"name": "...", "url": "https://... or null", "evidence_snippet": "<the snippet text that mentioned it>"}]}
+"""
+
+# 2026-09-14 remediation Phase 2, Channel C. New -- not covered by an
+# existing P-doc, so authored here following the same conventions as the
+# two prompts above (temperature 0.0, <data>-wrapped internet-derived
+# text, "return ONLY" JSON contract) and mirrored into
+# stratos-launch-plan/prompts/P5-COMPETITOR.md in the same commit per the
+# stratos-llm-prompts skill. Extracts named products already mentioned in
+# THIS report's own research evidence -- zero extra HTTP calls, since
+# research_worker already fetched and stored this text; candidates from
+# this channel arrive pre-cited (a real Source row already exists).
+COMPETITOR_CORPUS_EXTRACTION_PROMPT = """
+Extract company/product names that compete with or are direct alternatives to this business idea, from evidence already gathered during research for this same report.
+
+THE USER'S IDEA:
+<data>
+{{CLARIFIED_SUMMARY}}
+</data>
+
+RESEARCH SOURCES (id, title, excerpt each):
+<data>
+{{RESEARCH_SOURCES}}
+</data>
+
+Rules:
+1. Extract only companies/products that compete with or are alternatives to the idea above — not the publishers of the sources ("TechCrunch" is a publisher, not a competitor) and not the idea's own name.
+2. "source_id" must be the exact id from the list above that mentioned this company.
+3. "evidence_snippet": the exact phrase or sentence from that source's excerpt that names/describes the company, quoted verbatim (not summarized).
+4. Maximum 10 extractions. Skip anything ambiguous or already covered by a duplicate.
+
+Return ONLY:
+{"companies": [{"name": "...", "source_id": "...", "evidence_snippet": "..."}]}
+"""
+
 SECTION_WRITER_PROMPT = """
 You are the Section Writer for an evidence-grounded product research report.
 
@@ -533,7 +612,7 @@ JSON SCHEMA (STRICT):
   "chunks": [
     {
       "chunk_index": 1,
-      "text": "A concise paragraph with inline citations like [CIT-001].",
+      "text": "Markdown-formatted content (prose, a bulleted list, or a table -- whichever fits) with inline citations like [CIT-001].",
       "citations": [
         {
           "marker": "CIT-001",
@@ -547,9 +626,14 @@ JSON SCHEMA (STRICT):
 
 WRITING RULES:
 - Write 2 to 4 chunks.
-- Each chunk should be a coherent paragraph.
+- Each chunk's text is markdown. Use whichever structure fits the content, not prose by default:
+  - A table when comparing several named things (products, competitors, segments) on shared attributes.
+  - A bulleted or numbered list for enumerable findings, features, or steps.
+  - **Bold** short lead-ins to make a list or paragraph scannable.
+  - Plain prose for argument, explanation, or narrative reasoning that doesn't decompose into a list or table.
 - Keep each chunk focused on the section title.
-- Every citation in text must appear in the chunk's citations array.
+- Every citation marker in text must appear in the chunk's citations array, and must sit in the specific sentence, bullet, or table cell that makes the claim it supports -- not merely anywhere in the chunk.
+- In a table, a citation marker MUST be appended inside the text of an existing cell (e.g. "...30% faster [CIT-002]" within the cell that makes that claim). NEVER add a new column or an extra trailing cell just to hold a citation marker -- a data row must have exactly as many cells as the header row, or the table fails to render.
 - Every citation object must reference a source_id from the evidence blocks.
 - If evidence is weak, state the uncertainty using the provided evidence instead of guessing.
 
