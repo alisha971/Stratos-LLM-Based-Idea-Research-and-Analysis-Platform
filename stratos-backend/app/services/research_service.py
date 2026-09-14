@@ -7,6 +7,7 @@
 # app/services/research_service.py
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy.orm import Session
 from serpapi import GoogleSearch
 from typing import List, Dict
@@ -19,7 +20,10 @@ from app.utils.text_cleaner import clean_html
 from app.utils.chunking import chunk_text
 from app.utils.clarification_schema import research_directives
 from app.utils.redis_pub import publish_event
+from app.utils.degradation import record_degradation
 from app.llm.client import generate_chat
+from app.llm.json_parse import parse_json_object
+from app.llm.repair import generate_with_repair
 from app.llm.prompts import (
     COUNTER_RESEARCH_QUERY_PROMPT,
     RESEARCH_QUERY_PROMPT,
@@ -42,6 +46,25 @@ COUNTER_PASS_QUERY_COUNT = 3
 MAX_DIRECTIVE_SEEDS = 2
 STANCE_BATCH_SIZE = 10
 VALID_STANCES = {"supports", "challenges", "neutral"}
+
+# Fix-audit Part 0 Rule 1: the stance-classification prompt emits one JSON
+# object per source in the batch, but the call used to run on a fixed
+# per-task token budget (DEFAULT_MAX_TOKENS=768) that didn't scale with
+# STANCE_BATCH_SIZE. A full batch of 10 -- especially with the gpt-oss
+# hidden reasoning channel eating into the same budget -- could overrun it,
+# Groq's json_object validator would see truncated JSON, and the batch fell
+# straight to its fallback as a routine, not exceptional, event. The
+# per-source allowance below is deliberately generous (id + stance word +
+# one short rationale sentence + JSON punctuation is normally <40 tokens).
+STANCE_TOKENS_BASE = 120
+# Raised 90 -> 140 (2026-09-14 remediation, audit §7.4): the live
+# verification run truncated on a 3-source batch, well under the 10-source
+# STANCE_BATCH_SIZE cap -- proving the failure isn't purely a function of
+# batch size and there's real per-call variance (plausibly the model's
+# hidden reasoning channel consuming a variable share of the budget).
+# Widening the per-source allowance reduces, though does not guarantee
+# eliminating, this risk.
+STANCE_TOKENS_PER_SOURCE = 140
 
 # Astra caps any *indexed* string field at 8000 bytes, and the `evidence`
 # collection indexes every field (no deny-list at creation). `raw_text` is
@@ -221,19 +244,50 @@ class ResearchService:
         clarified_summary: str,
         source_ids: list[str],
     ) -> None:
+        """
+        2026-09-14 remediation Phase 4.6: classify_stance gates
+        research_done, which gates the research/trend/competitor join,
+        which gates all 7 sections -- so its own batches (STANCE_BATCH_SIZE
+        source_ids each) used to run one after another even though the
+        actual LLM calls have no dependency on each other. Split into
+        three phases: (1) prepare every batch's prompt SEQUENTIALLY (DB
+        reads -- Source/SourceEvidence queries -- stay on this thread, a
+        SQLAlchemy Session isn't thread-safe), (2) run every batch's LLM
+        call CONCURRENTLY (no DB access at all), (3) apply every batch's
+        result SEQUENTIALLY (DB writes, same thread-safety constraint).
+        Per-batch behavior (prompt, repair, fail-soft fallback,
+        degradation recording) is byte-for-byte unchanged from the
+        original single-threaded loop -- only the LLM network call itself
+        now overlaps across batches.
+        """
         if not source_ids or not clarified_summary:
             return
 
+        prepared_batches = []
         for i in range(0, len(source_ids), STANCE_BATCH_SIZE):
             batch_ids = source_ids[i : i + STANCE_BATCH_SIZE]
-            self._classify_stance_batch(report_id, clarified_summary, batch_ids)
+            prepared = self._prepare_stance_batch(batch_ids)
+            if prepared is not None:
+                prepared_batches.append(prepared)
 
-    def _classify_stance_batch(
-        self,
-        report_id: str,
-        clarified_summary: str,
-        batch_ids: list[str],
-    ) -> None:
+        if not prepared_batches:
+            return
+
+        with ThreadPoolExecutor(max_workers=min(4, len(prepared_batches))) as executor:
+            future_to_batch = {
+                executor.submit(
+                    self._run_stance_llm_call, report_id, clarified_summary, prepared
+                ): prepared
+                for prepared in prepared_batches
+            }
+            for future in as_completed(future_to_batch):
+                prepared = future_to_batch[future]
+                self._apply_stance_batch_result(report_id, prepared, future)
+
+    def _prepare_stance_batch(self, batch_ids: list[str]) -> dict | None:
+        """DB-safe (caller's thread only): builds the {id: Source} map and
+        listing text for one batch. Returns None when there's nothing
+        classifiable in this batch -- matches the original early-return."""
         sources = (
             self.db.query(models.Source)
             .filter(models.Source.id.in_(batch_ids))
@@ -241,7 +295,7 @@ class ResearchService:
         )
         by_id = {source.id: source for source in sources}
         if not by_id:
-            return
+            return None
 
         listing_lines = []
         for source_id in batch_ids:
@@ -262,24 +316,76 @@ class ResearchService:
             listing_lines.append(f"- id: {source_id} | quote: {quote}")
 
         if not listing_lines:
-            return
+            return None
 
+        return {"batch_ids": batch_ids, "by_id": by_id, "listing_lines": listing_lines}
+
+    def _run_stance_llm_call(
+        self, report_id: str, clarified_summary: str, prepared: dict
+    ) -> list[dict]:
+        """No DB access at all -- safe to run concurrently across
+        batches, unlike _prepare_stance_batch/_apply_stance_batch_result.
+        Raises ValueError (bad/unparseable response, including after one
+        repair attempt) or RuntimeError (generate_chat exhausted both Groq
+        keys); the caller (_apply_stance_batch_result) applies the
+        fail-soft fallback for both, and lets anything else (a real bug)
+        propagate."""
+        listing_lines = prepared["listing_lines"]
         prompt = (
             STANCE_CLASSIFICATION_PROMPT.replace(
                 "{{CLARIFIED_SUMMARY}}", clarified_summary
             ).replace("{{SOURCES}}", "\n".join(listing_lines))
         )
+        max_tokens = STANCE_TOKENS_BASE + STANCE_TOKENS_PER_SOURCE * len(listing_lines)
 
-        try:
+        def _generate_classifications(
+            repair_reason: str | None, temperature: float
+        ) -> list[dict]:
+            call_prompt = prompt
+            if repair_reason:
+                call_prompt += (
+                    "\n\nREPAIR REQUIRED:\n"
+                    f"{repair_reason}\n"
+                    "Regenerate the full JSON so the classifications are valid."
+                )
             raw = generate_chat(
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.2,
+                messages=[{"role": "system", "content": call_prompt}],
+                temperature=temperature,
                 task="stance_classification",
+                max_tokens=max_tokens,
             )
-            data = json.loads(raw)
+            data = parse_json_object(raw, label="Stance classification")
             classifications = data.get("classifications")
             if not isinstance(classifications, list):
                 raise ValueError("Invalid classifications format")
+            return classifications
+
+        # Fix-audit Part 2: one repair attempt before this batch's
+        # fallback (provenance prior) fires -- previously a single bad
+        # response degraded the whole batch immediately.
+        return generate_with_repair(
+            generate=_generate_classifications,
+            on_repair=lambda reason: logger.info(
+                "[RESEARCH] Repairing failed stance classification "
+                "report_id=%s reason=%s",
+                report_id,
+                reason,
+            ),
+        )
+
+    def _apply_stance_batch_result(
+        self, report_id: str, prepared: dict, future
+    ) -> None:
+        """DB-safe (caller's thread only): applies one batch's LLM result
+        (or its fail-soft fallback) to Postgres. `future` is this batch's
+        completed _run_stance_llm_call future -- calling .result() here
+        (not inside the thread pool) re-raises any exception it holds on
+        THIS thread, at the same point in the call graph the original
+        single-threaded try/except used to catch it."""
+        batch_ids = prepared["batch_ids"]
+        by_id = prepared["by_id"]
+        try:
+            classifications = future.result()
 
             updated = 0
             for entry in classifications:
@@ -302,17 +408,23 @@ class ResearchService:
                 len(batch_ids),
                 report_id,
             )
-        except Exception:
+        except (ValueError, RuntimeError) as exc:
             # Fail-soft (Stage 2d's discipline, same rule here): a
             # classification failure must never drop a source. Every
             # source in this batch keeps the provenance prior it was
             # already given at ingestion, which defaults toward "neutral"
-            # rather than dropping anything.
+            # rather than dropping anything. Narrowed from bare Exception
+            # (fix-audit Part 0 Rule 2): ValueError is a bad/unparseable
+            # response, RuntimeError is generate_chat exhausting both Groq
+            # keys -- a KeyError or DB error here is a real bug and must
+            # surface, not be silently absorbed as if it were an LLM hiccup.
             self.db.rollback()
+            record_degradation(report_id, "stance_classification", str(exc))
             logger.warning(
-                "[RESEARCH] Stance classification failed for report_id=%s batch_size=%d",
+                "[RESEARCH] Stance classification failed for report_id=%s batch_size=%d reason=%s",
                 report_id,
                 len(batch_ids),
+                exc,
                 exc_info=True,
             )
 
@@ -322,14 +434,40 @@ class ResearchService:
     def search(self, query: str, limit: int = 5) -> list[dict]:
         """
         Fetch organic search results from SerpAPI.
+
+        2026-09-14 remediation Phase 4.4: the three engines are
+        independent SerpAPI calls with no shared state -- run
+        concurrently instead of one after another. This is ALREADY
+        inside research_worker.py's own outer query-level ThreadPoolExecutor
+        (up to 4 queries in flight); this adds a second, small level of
+        concurrency within each query's own 3-engine fetch, which is safe
+        since none of the three share mutable state with each other.
         """
         logger.info("Running SERP search for query: %s", query)
 
-        results = []
-        results.extend(self._google_web(query, limit))
-        results.extend(self._google_news(query, limit))
-        results.extend(self._google_patents(query, limit))
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            web_future = executor.submit(self._google_web, query, limit)
+            news_future = executor.submit(self._google_news, query, limit)
+            patents_future = executor.submit(self._google_patents, query, limit)
 
+            results: list[dict] = []
+            for engine_name, future in (
+                ("web", web_future),
+                ("news", news_future),
+                ("patents", patents_future),
+            ):
+                try:
+                    results.extend(future.result())
+                except Exception:
+                    # _execute_serp already catches its own failures and
+                    # returns [] -- this is a last-resort net so one
+                    # engine's unexpected exception can't take the other
+                    # two down with it.
+                    logger.exception(
+                        "[RESEARCH] SERP engine=%s failed for query=%s",
+                        engine_name,
+                        query,
+                    )
 
         logger.info(
             "SERP returned %d total results for query=%s",
@@ -370,12 +508,20 @@ class ResearchService:
         )
 
     def _google_patents(self, query: str, limit: int) -> List[Dict]:
+        # 2026-09-14 remediation Phase 4.4: was max(10, limit) -- a fixed
+        # floor of 10 patent results per query regardless of the caller's
+        # actual limit, even though research_worker.py never scrapes a
+        # patent result at all (metadata-only, straight to a bare Source
+        # row -- see run_research's PATENT branch). Matching `limit` like
+        # the other two engines cuts this leg's SerpAPI payload/processing
+        # cost without removing the feature -- patent evidence is still
+        # genuinely relevant for some ideas (hardware, biotech).
         return self._execute_serp(
             params={
                 "engine": "google",
                 "q": query,
                 "tbm": "pts",
-                "num": max(10, limit),
+                "num": limit,
                 "api_key": settings.SERP_API_KEY,
             },
             source_type="patent",
@@ -384,7 +530,9 @@ class ResearchService:
     # --------------------------------------------------
     # SERP executor
     # --------------------------------------------------
-    def _execute_serp(self, params: dict, source_type: str) -> List[Dict]:
+    def _execute_serp(
+        self, params: dict, source_type: str, *, _is_retry: bool = False
+    ) -> List[Dict]:
         try:
             search = GoogleSearch(params)
             data = search.get_dict()
@@ -393,10 +541,27 @@ class ResearchService:
             return []
 
         if "error" in data:
+            error_message = str(data["error"])
+            # 2026-09-14 remediation Phase 5 (audit §4.6): "We couldn't
+            # get valid results for this search" was SerpAPI's own
+            # service-side error on 9 calls in the audited run --
+            # transient on their end, not a malformed request, so one
+            # retry is worth it before giving up. Every other error
+            # string still fails immediately (unchanged) -- most SerpAPI
+            # errors ARE the request itself being wrong (bad api_key,
+            # invalid params), which a retry would just repeat.
+            if not _is_retry and "couldn't get valid results" in error_message.lower():
+                logger.warning(
+                    "SERP API transient error (%s), retrying once: %s",
+                    source_type,
+                    error_message,
+                )
+                return self._execute_serp(params, source_type, _is_retry=True)
+
             logger.error(
                 "SERP API error (%s): %s",
                 source_type,
-                data["error"],
+                error_message,
             )
             return []
 
@@ -477,7 +642,9 @@ class ResearchService:
     # --------------------------------------------------
     # Scrape + extract
     # --------------------------------------------------
-    def scrape_and_extract(self, url: str) -> tuple[list[str], str | None]:
+    def scrape_and_extract(
+        self, url: str, report_id: str | None = None
+    ) -> tuple[list[str], str | None]:
         """Returns (chunks, cleaned_text). `chunks` is the WHOLE page split
         via chunk_text() (Stage 2a) -- deliberately not capped here the way
         the old "first 5 valid lines" extraction was, since that discarded
@@ -486,6 +653,12 @@ class ResearchService:
         bundle-build time (EvidenceBundleService), which caps how many
         chunks from any one source enter a section's bundle -- see
         stratos-launch-plan Stage 2a.
+
+        `report_id` is optional (mirrors TrendService.generate_queries) so
+        existing call sites/tests keep working; pass it to have a scrape
+        failure counted via record_degradation (fix-audit Part 0/5) -- a
+        run where every scrape fails DNS used to be indistinguishable from
+        a run where the pages were genuinely empty.
         """
         try:
             # SSRF guard: internet-supplied URLs must go through safe_get.
@@ -496,6 +669,8 @@ class ResearchService:
                     resp.status_code,
                     url,
                 )
+                if report_id:
+                    record_degradation(report_id, "web_scrape", f"non_200:{resp.status_code}")
                 return [], None
 
             cleaned = clean_html(resp.text)
@@ -505,9 +680,17 @@ class ResearchService:
 
         except BlockedRequestError as exc:
             logger.warning("Skipping blocked url=%s reason=%s", url, exc)
+            if report_id:
+                # A DNS failure and an actual SSRF block are different
+                # signals (fix-audit Part 5) -- keep them distinguishable
+                # in the tally, not just in the safe_fetch log line.
+                stage = "web_scrape_dns_failure" if "dns_resolution_failed" in str(exc) else "web_scrape_blocked"
+                record_degradation(report_id, stage, str(exc))
             return [], None
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to scrape url=%s", url)
+            if report_id:
+                record_degradation(report_id, "web_scrape", str(exc))
             return [], None
 
     # --------------------------------------------------

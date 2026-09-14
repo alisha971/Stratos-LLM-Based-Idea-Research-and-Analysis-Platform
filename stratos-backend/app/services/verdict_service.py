@@ -145,6 +145,7 @@ class VerdictService:
         self,
         context: dict[str, Any],
         repair_reason: str | None = None,
+        temperature: float = 0.2,
     ) -> dict[str, Any]:
         from app.llm.client import generate_chat
 
@@ -158,7 +159,7 @@ class VerdictService:
 
         raw_output = generate_chat(
             messages=[{"role": "system", "content": prompt}],
-            temperature=0.2,
+            temperature=temperature,
             task="verdict",
         )
         return self._parse_json(raw_output)

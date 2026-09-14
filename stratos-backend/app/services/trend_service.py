@@ -11,7 +11,6 @@ Trend Service
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -24,10 +23,12 @@ from sqlalchemy.orm import Session
 
 from app.db import models
 from app.llm.client import generate_chat
+from app.llm.json_parse import parse_json_object
 from app.llm.prompts import TREND_QUERY_PROMPT
+from app.llm.repair import generate_with_repair
 from app.services.astra_evidence_repository import AstraEvidenceRepository
 from app.services.embedding_service import CONTENT_TYPE_TREND_ITEM, EmbeddingService
-from app.utils.redis_pub import publish_event
+from app.utils.degradation import record_degradation
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -42,6 +43,15 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0 Safari/537.36"
 )
+
+# 2026-09-14 remediation Phase 4.7: module-level Session (connection
+# pooling), matching safe_fetch.py's own pattern -- every provider call
+# here previously opened a fresh connection + TLS handshake per request.
+# All four provider domains here are fixed, hardcoded, trusted API
+# endpoints (not internet-supplied URLs), so this stays a plain Session,
+# not routed through the SSRF-guarded safe_fetch (that guard exists for
+# URLs an attacker could influence, which none of these are).
+_session = requests.Session()
 
 CATEGORY_NEWS = "news"
 CATEGORY_PAPERS = "papers"
@@ -88,14 +98,21 @@ class TrendService:
             clarified_summary,
         )
 
-        try:
+        def _generate_queries(repair_reason: str | None, temperature: float) -> list[str]:
+            call_prompt = prompt
+            if repair_reason:
+                call_prompt += (
+                    "\n\nREPAIR REQUIRED:\n"
+                    f"{repair_reason}\n"
+                    "Regenerate the full JSON so the queries are valid."
+                )
             raw = generate_chat(
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.3,
+                messages=[{"role": "system", "content": call_prompt}],
+                temperature=temperature,
                 task="trend_query",
             )
 
-            data = json.loads(raw)
+            data = parse_json_object(raw, label="Trend query")
             queries = data.get("queries")
 
             if not isinstance(queries, list) or not queries:
@@ -109,24 +126,43 @@ class TrendService:
             if not cleaned:
                 raise ValueError("No valid queries")
 
-            logger.info("[TREND] Generated queries: %s", cleaned[:4])
             return cleaned[:4]
 
-        except Exception:
-            # Same fix as ResearchService._generate_queries (gap-closing
-            # plan Stage 3b): this is a machinery failure, not a sign the
-            # idea can't be researched -- degrade to a fallback that's
-            # still about the right subject, and flag the degradation
-            # rather than silently googling three generic strings.
+        try:
+            # Fix-audit Part 2: one repair attempt before the templated
+            # fallback fires -- previously a single bad response degraded
+            # immediately. base_temperature=0.3 preserves this method's
+            # original (non-default) first-attempt temperature.
+            cleaned = generate_with_repair(
+                generate=_generate_queries,
+                base_temperature=0.3,
+                on_repair=lambda reason: logger.info(
+                    "[TREND] Repairing failed query generation report_id=%s reason=%s",
+                    report_id,
+                    reason,
+                ),
+            )
+            logger.info("[TREND] Generated queries: %s", cleaned)
+            return cleaned
+
+        except (ValueError, RuntimeError) as exc:
+            # Fix-audit Part 0 Rule 2: narrowed from bare Exception -- a
+            # KeyError or a real bug here must surface, not be silently
+            # absorbed as if it were an LLM hiccup. Same fix as
+            # ResearchService._generate_queries (gap-closing plan Stage
+            # 3b): this is a machinery failure, not a sign the idea can't
+            # be researched -- degrade to a fallback that's still about the
+            # right subject, and record the degradation (fix-audit Part 0
+            # Rule 3; was a fire-and-forget research_degraded SSE event
+            # with no subscriber anywhere in the codebase) rather than
+            # silently googling three generic strings.
             logger.warning(
-                "[TREND] Query generation failed; using templated fallback",
+                "[TREND] Query generation failed; using templated fallback reason=%s",
+                exc,
                 exc_info=True,
             )
             if report_id:
-                publish_event(
-                    "research_degraded",
-                    {"report_id": report_id, "stage": "trend_query_generation"},
-                )
+                record_degradation(report_id, "trend_query_generation", str(exc))
             idea = (idea_description or "").strip()
             if not idea:
                 return ["industry trends", "market growth", "recent news"]
@@ -166,7 +202,7 @@ class TrendService:
             "numericFilters": f"created_at_i>{cutoff}",
             "hitsPerPage": limit,
         }
-        resp = requests.get(
+        resp = _session.get(
             HN_SEARCH_URL,
             params=params,
             headers={"User-Agent": DEFAULT_USER_AGENT},
@@ -260,7 +296,23 @@ class TrendService:
             f"{GOOGLE_NEWS_RSS_URL}?q={quote_plus(query)}"
             f"&hl=en-US&gl=US&ceid=US:en"
         )
-        feed = feedparser.parse(feed_url)
+        # 2026-09-14 remediation Phase 4.7: feedparser.parse(url) has no
+        # timeout parameter of its own for the URL-string form -- it does
+        # an untimed fetch internally, so a hung feed used to block this
+        # thread (inside trend_worker.py's 8-worker pool) forever. Fetch
+        # with a real timeout ourselves and hand feedparser the bytes
+        # instead of the URL.
+        try:
+            resp = _session.get(
+                feed_url, headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=10
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "[TREND] Google News RSS fetch failed for query=%s: %s", query, exc
+            )
+            return []
+        feed = feedparser.parse(resp.content)
         entries = (feed.entries or [])[:limit]
 
         items: list[dict] = []
@@ -298,7 +350,17 @@ class TrendService:
             f"&start=0&max_results={limit}"
             f"&sortBy=submittedDate&sortOrder=descending"
         )
-        feed = feedparser.parse(feed_url)
+        # 2026-09-14 remediation Phase 4.7: see fetch_google_news_rss --
+        # same untimed-feedparser-fetch fix.
+        try:
+            resp = _session.get(
+                feed_url, headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=10
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("[TREND] arXiv fetch failed for query=%s: %s", query, exc)
+            return []
+        feed = feedparser.parse(resp.content)
         entries = (feed.entries or [])[:limit]
 
         items: list[dict] = []
