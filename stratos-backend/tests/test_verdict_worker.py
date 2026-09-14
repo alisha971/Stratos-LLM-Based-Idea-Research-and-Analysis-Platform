@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.llm.repair import BASE_TEMPERATURE, REPAIR_TEMPERATURE
 from app.workers import verdict_worker
 
 
@@ -60,8 +61,11 @@ class RunVerdictRetryTests(unittest.TestCase):
             verdict_worker.run_verdict.run("report-1")
 
         self.assertEqual(service.generate_verdict_draft.call_count, 2)
+        first_kwargs = service.generate_verdict_draft.call_args_list[0].kwargs
+        self.assertEqual(first_kwargs.get("temperature"), BASE_TEMPERATURE)
         _, repair_kwargs = service.generate_verdict_draft.call_args
         self.assertIn("repair_reason", repair_kwargs)
+        self.assertEqual(repair_kwargs.get("temperature"), REPAIR_TEMPERATURE)
         self.assertNotIn("verdict_failed", self._event_names())
         self.assertIn("verdict_ready", self._event_names())
 

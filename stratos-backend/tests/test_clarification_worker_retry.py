@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import models
+from app.llm.repair import BASE_TEMPERATURE, REPAIR_TEMPERATURE
 from app.workers import clarification_worker
 
 
@@ -86,9 +87,14 @@ class RunClarificationRetryTests(unittest.TestCase):
             clarification_worker.run_clarification("s1")
 
         self.assertEqual(mock_generate.call_count, 2)
-        # second call's system prompt carries the repair reason
+        first_kwargs = mock_generate.call_args_list[0].kwargs
+        self.assertEqual(first_kwargs["temperature"], BASE_TEMPERATURE)
+        # second call's system prompt carries the repair reason, and runs at
+        # a raised temperature so it isn't a near-replay of the identical
+        # request that just failed (fix-audit Part 2).
         _, second_kwargs = mock_generate.call_args_list[1]
         self.assertIn("REPAIR REQUIRED", second_kwargs["messages"][0]["content"])
+        self.assertEqual(second_kwargs["temperature"], REPAIR_TEMPERATURE)
         self.assertNotIn("clarification_failed", self._event_names())
 
     def test_runtime_error_twice_fires_clarification_failed_once(self):

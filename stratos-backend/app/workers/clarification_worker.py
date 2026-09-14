@@ -1,6 +1,6 @@
 # app/workers/clarification_worker.py
 
-import json, re
+import json
 import logging
 import uuid
 from typing import Any
@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.workers.celery_app import celery_app
 from app.llm.client import generate_chat
+from app.llm.json_parse import parse_json_object
 from app.llm.prompts import CLARIFICATION_CONTROLLER_PROMPT
+from app.llm.repair import generate_with_repair
 from app.db.session import SessionLocal
 from app.db import models
 from app.utils.clarification_schema import (
@@ -258,7 +260,15 @@ def run_clarification(self, session_id: str):
         )
         force_finish = len(chat_messages) >= MAX_TOTAL_MESSAGES and idea_captured
 
-        def _call_and_parse(system_prompt: str) -> dict[str, Any]:
+        def _call_and_parse(repair_reason: str | None, temperature: float) -> dict[str, Any]:
+            system_prompt = CLARIFICATION_CONTROLLER_PROMPT
+            if repair_reason:
+                system_prompt += (
+                    "\n\nREPAIR REQUIRED:\n"
+                    f"{repair_reason}\n"
+                    "Regenerate the full JSON so the response is valid."
+                )
+
             messages = [{"role": "system", "content": system_prompt}]
             for msg in chat_messages:
                 messages.append({
@@ -268,48 +278,32 @@ def run_clarification(self, session_id: str):
 
             raw_output = generate_chat(
                 messages=messages,
-                temperature=0.2,
+                temperature=temperature,
                 task="clarification",
             )
+            # Fix-audit Part 2: was two hand-rolled guards duplicating
+            # json_parse.py (empty-response check, then a fence/regex
+            # extraction) -- parse_json_object already covers both (an
+            # empty string fails json.loads, then finds no {...} span to
+            # extract, and raises ValueError either way).
+            return parse_json_object(raw_output, label="Clarification")
 
-            raw_output = raw_output.strip()
-
-            # Guard 1: empty response
-            if not raw_output:
-                raise ValueError("LLM returned empty response")
-
-            # Guard 2: extract JSON object if extra text exists
-            try:
-                return json.loads(raw_output)
-            except json.JSONDecodeError:
-                # Attempt to extract JSON block
-                match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-                if not match:
-                    raise ValueError(f"Invalid JSON from LLM: {raw_output[:300]}")
-                return json.loads(match.group(0))
-
-        # LLM JSON reliability plan §4: a non-retryable Groq failure
-        # (RuntimeError from generate_chat) or a bad/empty response
-        # (ValueError from the guards above) gets exactly one repair retry --
-        # same shape as section_worker.py / verdict_worker.py -- instead of
-        # failing the whole clarification turn (clarification_failed is a
+        # Fix-audit Part 2 (was LLM JSON reliability plan §4): shared
+        # retry-and-repair-temperature orchestration (see app/llm/repair.py)
+        # -- a non-retryable Groq failure (RuntimeError) or a bad/empty
+        # response (ValueError) gets exactly one repair retry, at a raised
+        # temperature so it isn't a near-replay of the same failure, instead
+        # of failing the whole clarification turn (clarification_failed is a
         # fatal, session-ending event; see orchestrator_service.py) on a
         # single flaky call.
-        try:
-            result = _call_and_parse(CLARIFICATION_CONTROLLER_PROMPT)
-        except (ValueError, RuntimeError) as exc:
-            logger.info(
+        result = generate_with_repair(
+            generate=_call_and_parse,
+            on_repair=lambda reason: logger.info(
                 "[CLARIFICATION] Repairing failed response session_id=%s reason=%s",
                 session_id,
-                exc,
-            )
-            repair_prompt = (
-                CLARIFICATION_CONTROLLER_PROMPT
-                + "\n\nREPAIR REQUIRED:\n"
-                + f"{exc}\n"
-                + "Regenerate the full JSON so the response is valid."
-            )
-            result = _call_and_parse(repair_prompt)
+                reason,
+            ),
+        )
 
         existing_schema = session.clarification_schema or {}
 

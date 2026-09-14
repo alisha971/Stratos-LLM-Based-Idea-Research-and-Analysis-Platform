@@ -1,12 +1,13 @@
 from sqlalchemy.orm import Session
-import json, re
 import logging
 
 from app.workers.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.db import models
 from app.llm.client import generate_chat
+from app.llm.json_parse import parse_json_object
 from app.llm.prompts import OUTLINE_PROMPT
+from app.llm.repair import generate_with_repair
 from app.utils.redis_pub import publish_event
 
 logger = logging.getLogger(__name__)
@@ -60,35 +61,36 @@ def run_outline(self, report_id: str):
             session.clarified_summary
         )
 
-        def _generate_and_parse(system_prompt: str) -> list[str]:
+        def _generate_and_parse(repair_reason: str | None, temperature: float) -> list[str]:
+            full_prompt = prompt
+            if repair_reason:
+                full_prompt += (
+                    "\n\nREPAIR REQUIRED:\n"
+                    f"{repair_reason}\n"
+                    "Regenerate the full JSON so the outline is valid."
+                )
             raw_output = generate_chat(
-                messages=[{"role": "system", "content": system_prompt}],
-                temperature=0.2,
+                messages=[{"role": "system", "content": full_prompt}],
+                temperature=temperature,
                 task="outline",
             )
             return parse_outline(raw_output)
 
-        # LLM JSON reliability plan §4: same one-shot repair retry as
-        # clarification_worker.py / section_worker.py / verdict_worker.py --
-        # outline_failed is a fatal, session-ending event (see
+        # Fix-audit Part 2 (was LLM JSON reliability plan §4): shared
+        # retry-and-repair-temperature orchestration (see app/llm/repair.py)
+        # -- outline_failed is a fatal, session-ending event (see
         # orchestrator_service.py), so a single non-retryable Groq failure
         # (RuntimeError) or malformed output (ValueError from parse_outline)
-        # shouldn't kill the run without one retry.
-        try:
-            section_titles = _generate_and_parse(prompt)
-        except (ValueError, RuntimeError) as exc:
-            logger.info(
+        # gets exactly one retry, at a raised temperature so it isn't a
+        # near-replay of the same failure, before the run is killed.
+        section_titles = generate_with_repair(
+            generate=_generate_and_parse,
+            on_repair=lambda reason: logger.info(
                 "[OUTLINE] Repairing failed draft report_id=%s reason=%s",
                 report_id,
-                exc,
-            )
-            repair_prompt = (
-                prompt
-                + "\n\nREPAIR REQUIRED:\n"
-                + f"{exc}\n"
-                + "Regenerate the full JSON so the outline is valid."
-            )
-            section_titles = _generate_and_parse(repair_prompt)
+                reason,
+            ),
+        )
 
         # -------------------------------
         # Idempotent persistence
@@ -149,10 +151,11 @@ def parse_outline(raw_output: str) -> list[str]:
     Parse STRICT JSON output from LLM.
     Enforce core sections + limit optional sections.
     """
-    try:
-        data = json.loads(raw_output)
-    except json.JSONDecodeError:
-        raise ValueError("Outline LLM output is not valid JSON")
+    # Fix-audit Part 2: routed through the same tolerant parser every other
+    # call site uses (fences, a gpt-oss harmony preamble before the JSON
+    # object) instead of a bare json.loads -- label matches the original
+    # message text exactly, so this is a pure robustness improvement.
+    data = parse_json_object(raw_output, label="Outline")
 
     sections = data.get("sections")
     if not isinstance(sections, list) or not sections:

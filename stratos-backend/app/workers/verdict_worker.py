@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.db.session import SessionLocal
+from app.llm.repair import generate_with_repair
 from app.services.verdict_service import VerdictService
 from app.utils.redis_pub import publish_event
 from app.workers.celery_app import celery_app
@@ -26,17 +27,19 @@ def run_verdict(self, report_id: str):
         service = VerdictService(db=db)
         context = service.build_verdict_context(report_id)
 
-        try:
-            draft = service.generate_verdict_draft(context)
-            service.validate_verdict_draft(draft, context)
-        except (ValueError, RuntimeError) as exc:
-            logger.info(
+        # Fix-audit Part 2: shared retry-and-repair-temperature orchestration
+        # (see app/llm/repair.py) -- same shape as section_worker.py.
+        draft = generate_with_repair(
+            generate=lambda repair_reason, temperature: service.generate_verdict_draft(
+                context, repair_reason=repair_reason, temperature=temperature
+            ),
+            validate=lambda draft: service.validate_verdict_draft(draft, context),
+            on_repair=lambda reason: logger.info(
                 "[VERDICT] Repairing failed draft report_id=%s reason=%s",
                 report_id,
-                exc,
-            )
-            draft = service.generate_verdict_draft(context, repair_reason=str(exc))
-            service.validate_verdict_draft(draft, context)
+                reason,
+            ),
+        )
 
         service.persist_verdict(report_id, draft)
 
