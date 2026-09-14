@@ -109,6 +109,15 @@ def run_research(self, report_id: str):
         # --------------------------------------------------
         newly_created_source_ids: list[str] = []
 
+        # 2026-09-14 remediation Phase 4.2: news/patent results need no
+        # scrape (their content is already in the SERP result) and are
+        # handled immediately below, DB-safe on the main thread as
+        # before. Web results need a real fetch -- collected here instead
+        # of scraped inline, so ALL of them (across every query, not just
+        # one query's sub-batch) can go through ONE shared scrape pool
+        # below rather than nesting a fresh pool per query.
+        web_results_to_scrape: list[tuple[dict, str]] = []
+
         with ThreadPoolExecutor(max_workers=min(4, len(queries_with_pass) or 1)) as executor:
             future_to_query = {
                 executor.submit(service.search, query): (query, stance_prior)
@@ -134,7 +143,11 @@ def run_research(self, report_id: str):
                 )
 
                 # --------------------------------------------------
-                # Result processing (SEQUENTIAL, DB-safe)
+                # Result triage (SEQUENTIAL, DB-safe): is_duplicate_url
+                # and create_source both touch the SQLAlchemy Session,
+                # which is not thread-safe -- this loop stays on the main
+                # thread. Only the scrape itself (network I/O, no DB) is
+                # deferred to the shared pool below.
                 # --------------------------------------------------
                 for result in results:
                     url = result["url"]
@@ -188,46 +201,85 @@ def run_research(self, report_id: str):
                         continue
 
                     # ---------------------------
-                    # WEB → scrape required
+                    # WEB → deferred to the shared scrape pool below
                     # ---------------------------
-                    snippets, full_text = service.scrape_and_extract(url)
+                    web_results_to_scrape.append((result, stance_prior))
 
-                    logger.debug(
-                        "[RESEARCH] Extracted %d snippets from %s",
-                        len(snippets),
-                        url,
-                    )
+        # --------------------------------------------------
+        # SHARED SCRAPE POOL (Phase 4.2): scrape_and_extract is pure
+        # network I/O + HTML clean + chunk -- no DB access -- so every
+        # web result collected above (across every query) is fetched
+        # concurrently here, bounded at 4 in flight (matches the SERP
+        # pool's own bound; safe_fetch's module-level Session and
+        # thread-local IP pinning already support concurrent callers --
+        # see safe_fetch.py's own docstring on this).
+        # --------------------------------------------------
+        logger.info(
+            "[RESEARCH] Scraping %d web results across all queries",
+            len(web_results_to_scrape),
+        )
+        with ThreadPoolExecutor(
+            max_workers=min(4, len(web_results_to_scrape) or 1)
+        ) as scrape_executor:
+            scrape_future_to_entry = {
+                scrape_executor.submit(
+                    service.scrape_and_extract, result["url"], report_id=report_id
+                ): (result, stance_prior)
+                for result, stance_prior in web_results_to_scrape
+            }
 
-                    if not snippets:
-                        continue
+            # --------------------------------------------------
+            # Result processing (SEQUENTIAL, DB-safe): as each scrape
+            # completes, its Postgres/Astra/embedding writes still happen
+            # one at a time on the main thread -- only the fetch itself
+            # ran concurrently above.
+            # --------------------------------------------------
+            for scrape_future in as_completed(scrape_future_to_entry):
+                result, stance_prior = scrape_future_to_entry[scrape_future]
+                url = result["url"]
 
-                    source = service.create_source(report_id, result, stance=stance_prior)
-                    newly_created_source_ids.append(source.id)
-                    service.save_evidence(source.id, snippets)
+                try:
+                    snippets, full_text = scrape_future.result()
+                except Exception:
+                    logger.exception("[RESEARCH] Scrape failed for url=%s", url)
+                    continue
 
-                    evidence_id = service.save_to_astra(
-                        report_id=report_id,
-                        source_id=source.id,
-                        url=url,
-                        text=full_text,
-                        metadata={**result, "snippets": snippets},
-                    )
+                logger.debug(
+                    "[RESEARCH] Extracted %d snippets from %s",
+                    len(snippets),
+                    url,
+                )
 
-                    # Stage 2c: vectorize on the ingestion path, so
-                    # everything is ready by the time the Stage 1b join
-                    # completes. Fail-soft -- an Astra/NVIDIA hiccup here
-                    # degrades this source's ranking to lexical-only rather
-                    # than failing the run (see EmbeddingService).
-                    embedding_service.save_chunks(
-                        report_id=report_id,
-                        content_type=CONTENT_TYPE_WEB_CHUNK,
-                        chunks=snippets,
-                        source_id=source.id,
-                        evidence_id=evidence_id,
-                        url=url,
-                        domain=source.domain,
-                        stance=stance_prior,
-                    )
+                if not snippets:
+                    continue
+
+                source = service.create_source(report_id, result, stance=stance_prior)
+                newly_created_source_ids.append(source.id)
+                service.save_evidence(source.id, snippets)
+
+                evidence_id = service.save_to_astra(
+                    report_id=report_id,
+                    source_id=source.id,
+                    url=url,
+                    text=full_text,
+                    metadata={**result, "snippets": snippets},
+                )
+
+                # Stage 2c: vectorize on the ingestion path, so
+                # everything is ready by the time the Stage 1b join
+                # completes. Fail-soft -- an Astra/NVIDIA hiccup here
+                # degrades this source's ranking to lexical-only rather
+                # than failing the run (see EmbeddingService).
+                embedding_service.save_chunks(
+                    report_id=report_id,
+                    content_type=CONTENT_TYPE_WEB_CHUNK,
+                    chunks=snippets,
+                    source_id=source.id,
+                    evidence_id=evidence_id,
+                    url=url,
+                    domain=source.domain,
+                    stance=stance_prior,
+                )
 
         # Stage 3e step 2: refine every provenance prior set above with an
         # actual LLM read of each source against this specific idea.

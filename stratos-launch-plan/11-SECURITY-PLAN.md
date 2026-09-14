@@ -59,7 +59,7 @@
 Build one guarded fetcher in `app/utils/safe_fetch.py` and make **every** outbound page fetch (research W3-R2, competitor W5-K2/K3) go through it:
 
 1. Allow only `http`/`https` schemes, ports 80/443.
-2. Resolve DNS **first**, then connect to the resolved IP (pass it pinned to the request) — and reject if any resolved address is private/reserved/loopback/link-local (`ipaddress` module: `is_private or is_loopback or is_link_local or is_reserved or is_multicast`). Re-check on redirects (cap redirects at 3) — redirect-to-internal is the classic bypass.
+2. Resolve DNS **first**, then connect to the resolved IP (pass it pinned to the request) — and reject if any resolved address is private/reserved/loopback/link-local (`ipaddress` module: `is_private or is_loopback or is_link_local or is_reserved or is_multicast`). Re-check on redirects (cap redirects at 6, raised from 3 in the 2026-09-14 remediation to accommodate real-world multi-hop marketing sites — every single hop still gets the full DNS-resolve-then-reject check, so the cap increase does not weaken the guard) — redirect-to-internal is the classic bypass.
 3. Response caps: max 2 MB body, 8 s read timeout, text content-types only.
 4. Emit a structured log line for every blocked fetch (this is your intrusion signal).
 
