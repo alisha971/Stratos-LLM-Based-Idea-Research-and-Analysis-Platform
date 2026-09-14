@@ -150,4 +150,47 @@ describe("stage components", () => {
     expect(screen.getByText("What the typical price point should be.", { exact: false })).toBeInTheDocument();
     expect(screen.queryByText("Weighing the evidence…")).not.toBeInTheDocument();
   });
+
+  it("renders a GFM markdown table as a real table, not raw pipe syntax", () => {
+    // Fix-audit: the PDF export now renders chunk.text's markdown tables
+    // as real tables (app/services/markdown_pdf.py) -- the web view must
+    // render the identical string the same way, not as literal "| a | b |"
+    // text, which react-markdown alone (without remark-gfm) would do.
+    render(
+      <ReportSplitPanel
+        finalReport={{
+          report_id: "rep-1",
+          status: "EXPORTED",
+          title: "Report",
+          verdict: null,
+          unresolved_gaps: [],
+          sections: [
+            {
+              section_id: "s1",
+              title: "Existing Solutions",
+              order_index: 0,
+              chunks: [
+                {
+                  chunk_id: "c1",
+                  order_index: 0,
+                  text: "| Vendor | Price |\n| --- | --- |\n| Acme | $29/mo |\n",
+                  citations: [],
+                },
+              ],
+            },
+          ],
+        }}
+        sections={[]}
+        verdict={null}
+        unresolvedGaps={[]}
+        onDownloadPdf={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Vendor" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Acme" })).toBeInTheDocument();
+    // Not left as literal markdown syntax anywhere in the document.
+    expect(screen.queryByText("| Vendor | Price |", { exact: false })).not.toBeInTheDocument();
+  });
 });

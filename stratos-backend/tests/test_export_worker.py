@@ -14,8 +14,33 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import ListFlowable, Table
 
 from app.workers.export_worker import _build_story, _linkify, _render_pdf, _render_source_line
+
+
+def _extract_text(flowable) -> str:
+    """Recursively pull readable text (including ReportLab's own
+    <b>/<a>/... mini-HTML markup) out of any flowable _build_story can
+    produce -- Paragraph (.text directly), ListFlowable (nested ListItems,
+    each holding one or more flowables), and Table (nested Paragraph
+    cells). Fix-audit Part 6b: chunks/gaps can now expand into
+    ListFlowable/Table, neither of which has a plain .text attribute."""
+    if hasattr(flowable, "text"):
+        return flowable.text
+    if isinstance(flowable, ListFlowable):
+        parts = []
+        for item in flowable._flowables:
+            for sub in item._flowables:
+                parts.append(_extract_text(sub))
+        return "\n".join(parts)
+    if isinstance(flowable, Table):
+        parts = []
+        for row in flowable._cellvalues:
+            for cell in row:
+                parts.append(_extract_text(cell))
+        return " | ".join(parts)
+    return ""
 
 
 class LinkifyTests(unittest.TestCase):
@@ -89,6 +114,45 @@ class RenderSourceLineTests(unittest.TestCase):
         )
         self.assertIn("neutral", para.text)
 
+    def test_shows_resolved_title_with_domain_not_domain_alone(self):
+        # Fix-audit Part 6d: the assembler already resolves a title
+        # (assembler_worker.py) -- it was being discarded in favor of the
+        # bare domain.
+        para = _render_source_line(
+            "CIT-001",
+            {
+                "url": "https://example.com/a",
+                "domain": "example.com",
+                "title": "Example Product Homepage",
+                "stance": "supports",
+            },
+            self.styles,
+        )
+        self.assertIn("Example Product Homepage", para.text)
+        self.assertIn("example.com", para.text)
+
+    def test_missing_title_falls_back_to_domain_only(self):
+        para = _render_source_line(
+            "CIT-001",
+            {"url": "https://example.com/a", "domain": "example.com", "stance": "supports"},
+            self.styles,
+        )
+        self.assertIn("example.com", para.text)
+
+    def test_url_containing_a_quote_does_not_break_the_anchor_markup(self):
+        # Fix-audit Part 6d: escape() does not escape '"', so a URL
+        # containing one used to break out of the href="..." attribute.
+        # quoteattr() must be used instead.
+        para = _render_source_line(
+            "CIT-001",
+            {"url": 'https://example.com/a?x="y"', "domain": "example.com", "stance": "supports"},
+            self.styles,
+        )
+        # A real, well-formed single anchor tag -- not markup broken into
+        # multiple unintended attributes/tags by an unescaped quote.
+        self.assertEqual(para.text.count("<a href="), 1)
+        self.assertIn("</a>", para.text)
+
 
 class BuildStoryTests(unittest.TestCase):
     """Inspects the .text of each flowable _build_story would hand to
@@ -131,7 +195,7 @@ class BuildStoryTests(unittest.TestCase):
 
     def _story_text(self, draft) -> str:
         story = _build_story(draft)
-        return "\n".join(getattr(flowable, "text", "") for flowable in story)
+        return "\n".join(_extract_text(flowable) for flowable in story)
 
     def test_topic_is_the_title_not_generic_string(self):
         text = self._story_text(self._draft())
@@ -208,7 +272,36 @@ class RenderPdfSmokeTests(unittest.TestCase):
                     "chunks": [
                         {"chunk_id": "c1", "chunk_index": 1, "text": "Residents lack time [CIT-001]."}
                     ],
-                }
+                },
+                {
+                    "section_id": "sec-2",
+                    "title": "Existing Solutions",
+                    "order_index": 1,
+                    "chunks": [
+                        {
+                            "chunk_id": "c2",
+                            "chunk_index": 1,
+                            # Fix-audit Part 6b: markdown structure (heading,
+                            # bullets, bold, a GFM table with a citation
+                            # inside a cell, a blockquote) actually reaching
+                            # doc.build() -- a malformed flowable or
+                            # mini-HTML tag would only surface here, not in
+                            # BuildStoryTests' pure inspection.
+                            "text": (
+                                "### Market Overview\n\n"
+                                "Several **existing** products serve this market:\n\n"
+                                "- Vendor A charges $29/mo [CIT-001]\n"
+                                "- Vendor B is free with ads [CIT-002]\n\n"
+                                "| Vendor | Price | Notes |\n"
+                                "| --- | --- | --- |\n"
+                                "| A | $29/mo | Popular choice [CIT-001] |\n"
+                                "| B | Free | Ad-supported [CIT-002] |\n\n"
+                                "> A caveat worth noting [CIT-001].\n"
+                            ),
+                        }
+                    ],
+                    "coverage_note": "This section could not be fully completed.",
+                },
             ],
             "sources": {
                 "CIT-001": {"url": "https://a.example.com?x=1&y=2", "domain": "a.example.com", "stance": "supports"},

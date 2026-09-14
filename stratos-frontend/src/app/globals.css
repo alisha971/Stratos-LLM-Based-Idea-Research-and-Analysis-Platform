@@ -122,3 +122,24 @@ body::after {
   font-family: var(--font-geist-mono), monospace;
   font-size: 0.9em;
 }
+/* GFM tables (remark-gfm) -- header shading and grid mirror the PDF
+   export's own table styling (app/services/markdown_pdf.py) so a table
+   reads as the same document on both surfaces, not two different ones. */
+.report-markdown table {
+  margin-top: 0.75em;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.report-markdown th,
+.report-markdown td {
+  border: 1px solid var(--color-rule);
+  padding: 0.4em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.report-markdown thead th {
+  background-color: var(--color-paper-sunken);
+  font-weight: 600;
+  color: var(--ink);
+}

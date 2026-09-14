@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { PdfDownloadButton } from "@/components/report/PdfDownloadButton";
 import { VerdictCard } from "@/components/report/VerdictCard";
@@ -104,8 +105,12 @@ export function ReportSplitPanel({
                   {section.chunks.map((chunk) => (
                     <div key={chunk.chunk_id} className="mt-3">
                       <div className="report-markdown text-sm leading-relaxed text-ink-soft">
-                        {/* No rehype-raw: raw HTML in LLM output is NOT rendered (security §6). */}
-                        <ReactMarkdown>{chunk.text}</ReactMarkdown>
+                        {/* remark-gfm: tables, since the PDF export renders
+                            them too (fix-audit) -- the two must stay in
+                            sync, both rendering the same chunk.text.
+                            No rehype-raw: raw HTML in LLM output is NOT
+                            rendered (security §6). */}
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{chunk.text}</ReactMarkdown>
                       </div>
                       {chunk.citations.length > 0 ? (
                         <ul className="mt-3 space-y-1 border-l border-rule pl-4">

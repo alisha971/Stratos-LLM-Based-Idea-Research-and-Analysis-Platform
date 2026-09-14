@@ -14,7 +14,13 @@ openai
 astrapy
 aiofiles
 sse-starlette
-reportlab
+# Pinned (unlike the rest of this file) -- fix-audit Part 6 made PDF
+# export version-sensitive in ways that must not silently drift in CI:
+# reportlab for font registration (app/utils/pdf_fonts.py) and Table/
+# ListFlowable styling, mistune for its AST-mode API shape (its major
+# versions are not backward compatible) used by app/services/markdown_pdf.py.
+reportlab==5.0.1
+mistune==3.3.4
 pypdf
 beautifulsoup4
 httpx
